@@ -7,6 +7,7 @@
 
 if the folder name is different, need to change in source code
 
+```
 ros2_ws
 |- src
 |- install
@@ -21,7 +22,7 @@ ros2_ws
 |--------------------------------------------|- image_03
 |--------------------------------------------|- oxts
 |--------------------------------------------|- velodyne_points
-
+```
 
 ## Build and Run 
 
@@ -72,7 +73,7 @@ rviz2
 
 - Record ROS2 bag, open new terminal, should run the command before play the node
 
-![rviz2](kitti_rosbag.gif)
+![rviz2](./reference/kitti_rosbag.gif)
 
 ```
 ros2 bag record -a -o kitti_dataset_0009
