@@ -11,9 +11,42 @@ find_package(rclcpp REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(vision_msgs REQUIRED)  #  Detection2DArray
 find_package(sensor_msgs REQUIRED)  #  Image
+find_package(PCL REQUIRED COMPONENTS common filters io segmentation sample_consensus) # PLC
+find_package(pcl_conversions REQUIRED)
 
+# cpp executables
+add_executable(lidar_preprocessing src/lidar_preprocessing.cpp)
+
+# Include PCL directories
+target_include_directories(lidar_preprocessing PUBLIC
+  ${PCL_INCLUDE_DIRS}
+)
+
+# Compile definitions for PCL
+target_compile_definitions(lidar_preprocessing PUBLIC
+  ${PCL_DEFINITIONS}
+)
+
+# Link ROS2 and PCL libraries
+target_link_libraries(lidar_preprocessing ${PCL_LIBRARIES})
+
+# ament macro to link standard ROS2 dependencies (rclcpp, sensor_msgs, etc.)
+# for cpp
+ament_target_dependencies(lidar_preprocessing
+  rclcpp                        # for ROS2 C++ client library
+  sensor_msgs                   # for PointCloud2 messages
+  pcl_conversions               # for converting between PCL and ROS2 PointCloud2 messages
+)
+
+# --- INSTALLATION CONFIGURATION ---
+# python scripts
 install(PROGRAMS
   lidar_camera_perception/camera_object_detection.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# C++ executable
+install(TARGETS lidar_preprocessing
   DESTINATION lib/${PROJECT_NAME}
 )
 
