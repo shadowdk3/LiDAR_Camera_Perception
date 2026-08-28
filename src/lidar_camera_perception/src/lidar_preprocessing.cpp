@@ -15,7 +15,7 @@ class PreprocessingNode : public rclcpp::Node
         PreprocessingNode() : Node("lidar_preprocessing_node")
         {
             // Create a subscription to the LIDAR point cloud topic
-            subscription_lidar = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+            subscription_lidar_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
                 "/kitti/point_cloud",
                 10,
                 std::bind(&PreprocessingNode::lidarCallback, this, std::placeholders::_1)
@@ -25,7 +25,7 @@ class PreprocessingNode : public rclcpp::Node
             publisher_object_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/lidar_preprocessing/object_pcd", 10);
             publisher_ground_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/lidar_preprocessing/ground_pcd", 10);
 
-            RCLCPP_INFO(this->get_logger(), "Lidar Preprocessing Node Started...");
+            RCLCPP_INFO(this->get_logger(), "LiDAR Preprocessing Node Started...");
         }
 
     private:
@@ -232,7 +232,7 @@ class PreprocessingNode : public rclcpp::Node
         }
 
         // ROS2 Subscribers and Publishers
-        rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_lidar;
+        rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_lidar_;
         rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr publisher_object_;
         rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr publisher_ground_;
 };
