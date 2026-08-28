@@ -4,5 +4,6 @@
 - ROS2bag
 - YOLOv11 (yolo11n.pt)
 - OpenCV
-- Point Cloud Library (segment)
+- segmentation (PCL)
+- Cluster (PCL)
 
