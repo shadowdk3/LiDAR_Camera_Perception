@@ -33,8 +33,19 @@ def generate_launch_description():
         remappings=[]
     )
 
+    # 3. Configure the Lidar Tracker Node
+    lidar_tracker_node = Node(
+        package=package_name,
+        executable='lidar_tracker',
+        name='lidar_tracker_node',
+        output='screen',
+        parameters=[],
+        remappings=[]
+    )
+    
     # Create and return the LaunchDescription to execute both nodes simultaneously
     return LaunchDescription([
         lidar_preprocessing_node,
-        lidar_cluster_object_node
+        lidar_cluster_object_node,
+        lidar_tracker_node
     ])

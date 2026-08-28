@@ -190,7 +190,7 @@ class LidarClusterObjectNode : public rclcpp::Node
 int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);                                   // Initialize ROS 2
-    rclcpp::spin(std::make_shared<LidarClusterObjectNode>());   // Spin the node to process callbacks
+    rclcpp::spin(std::make_shared<LidarClusterObjectNode>());   // Spin the node to process callback
     rclcpp::shutdown();
     return 0;
 }
