@@ -18,10 +18,12 @@ find_package(pcl_conversions REQUIRED)
 # cpp executables
 add_executable(lidar_preprocessing src/lidar_preprocessing.cpp)
 add_executable(lidar_cluster_object src/lidar_cluster_object.cpp)
+add_executable(lidar_tracker src/lidar_tracker.cpp)
 
 set(ALL_CPP_TARGETS 
   lidar_preprocessing 
   lidar_cluster_object
+  lidar_tracker
 )
 
 foreach(target ${ALL_CPP_TARGETS})
@@ -42,6 +44,13 @@ ament_target_dependencies(lidar_cluster_object
   rclcpp
   sensor_msgs
   pcl_conversions
+  visualization_msgs                              
+)
+
+ament_target_dependencies(lidar_tracker
+  rclcpp
+  sensor_msgs
+  # pcl_conversions
   visualization_msgs                              
 )
 
