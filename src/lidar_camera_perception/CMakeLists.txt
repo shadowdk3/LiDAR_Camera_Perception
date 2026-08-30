@@ -14,16 +14,19 @@ find_package(sensor_msgs REQUIRED)  #  Image
 find_package(visualization_msgs REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common filters io segmentation sample_consensus) # PLC
 find_package(pcl_conversions REQUIRED)
+find_package(cv_bridge REQUIRED)
 
 # cpp executables
 add_executable(lidar_preprocessing src/lidar_preprocessing.cpp)
 add_executable(lidar_cluster_object src/lidar_cluster_object.cpp)
 add_executable(lidar_tracker src/lidar_tracker.cpp)
+add_executable(lidar_image_fusion src/lidar_image_fusion.cpp)
 
 set(ALL_CPP_TARGETS 
   lidar_preprocessing 
   lidar_cluster_object
   lidar_tracker
+  lidar_image_fusion
 )
 
 foreach(target ${ALL_CPP_TARGETS})
@@ -50,8 +53,15 @@ ament_target_dependencies(lidar_cluster_object
 ament_target_dependencies(lidar_tracker
   rclcpp
   sensor_msgs
-  # pcl_conversions
   visualization_msgs                              
+)
+
+ament_target_dependencies(lidar_image_fusion
+  rclcpp
+  sensor_msgs
+  vision_msgs
+  visualization_msgs
+  cv_bridge                           
 )
 
 # --- INSTALLATION CONFIGURATION ---
