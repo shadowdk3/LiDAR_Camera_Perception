@@ -1,8 +1,5 @@
-# ROS2 LiDAR Camera perceiption
-------------------------------------
-
 # ROS2 LiDAR-Camera Perception Pipeline
-
+------------------------------------
 This project implements a real-time 3D multi-object tracking and sensor fusion pipeline using **ROS2**, combining **LiDAR point clouds** and **camera images** for robust environment perception.
 
 ![demo](./reference/demo.gif)
