@@ -7,7 +7,9 @@ This project implements a real-time 3D multi-object tracking and sensor fusion p
 ## Core Features
 
 *   **Data Replay**: Leverages `ros2bag` to replay and process recorded sensor data streams.
-*   **2D Object Detection**: Utilizes **YOLOv11** to detect and classify 2D objects in camera frames.
+*   **2D Object Detection**: Detect and classify 2D objects in camera frames.
+    *   **Option 1: YOLOv11**: Optimized single-stage detector delivering high frame rates on edge hardware.
+    *   **Option 2: PyTorch Faster R-CNN**: Robust two-stage regional proposal network utilizing official weights pre-trained on **COCO 91 classes**.
 *   **3D Point Cloud Segmentation**: Employs **PCL (Point Cloud Library)** to filter out ground planes and isolate obstacles.
 *   **Object Clustering**: Groups isolated 3D points into distinct object clusters using PCL.
 *   **3D Multi-Object Tracking**: Applies a **Kalman Filter** tracker to maintain identities (Track IDs) across frames.
@@ -23,6 +25,21 @@ By developing this project, the primary technical goals and core competencies ac
 *   **State Estimation & Tracking**: Understood and applied **Kalman Filtering** to track moving obstacles in 3D space, ensuring identity persistence (Track ID) under occlusion.
 *   **Modern ROS2 Architecture**: Designed and synchronized asynchronous node communication (Subscriptions, Synchronizers, and Custom Publishers) in a modular ROS2 ecosystem.
 *   **Deep Learning Deployment**: Integrated **YOLOv11** object detection inside a ROS2 Python/C++ pipeline to leverage real-time vision inferences.
+
+## Execution Options & Class Mapping
+
+The node automatically re-maps traffic categories depending on your selected runtime backend option:
+
+| Target Class | YOLOv11 Class ID | PyTorch Faster R-CNN (COCO 91) ID |
+| :--- | :---: | :---: |
+| `person` | 0 | 1 |
+| `bicycle` | 1 | 2 |
+| `car` | 2 | 3 |
+| `motorcycle` | 3 | 4 |
+| `bus` | 5 | 6 |
+| `truck` | 7 | 8 |
+| `traffic_light` | 9 | 10 |
+| `stop_sign` | 11 | 12 |
 
 ## Pipeline Architecture
 

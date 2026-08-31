@@ -71,6 +71,11 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+install(PROGRAMS
+  lidar_camera_perception/pytorch_camera_object_detection.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 # C++ executable
 install(TARGETS ${ALL_CPP_TARGETS}
   DESTINATION lib/${PROJECT_NAME}
