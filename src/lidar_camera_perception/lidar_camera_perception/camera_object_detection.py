@@ -9,6 +9,8 @@ from cv_bridge import CvBridge
 from ultralytics import YOLO
 import cv2
 
+from db_logger import DatabaseLogger  # Use relative or absolute package import based on folder layout
+
 # for the detection result, only consider the following classes: person, bicycle, car, motorcycle, bus, truck, traffic light, stop sign
 TARGET_CLASSES = {
     'person': 0,
@@ -28,6 +30,9 @@ class CameraObjectDetectionNode(Node):
         # YOLO setting
         self.model = YOLO("yolo11n.pt")
         self.confidence_threshold = 0.5
+        
+        # Initialize Database Logger instance
+        self.db = DatabaseLogger(self.get_logger())
         
         # subscribe to the camera image topic, and run the image_callback function when a new image is received
         self.sub_left_color = self.create_subscription(Image, '/kitti/image/color/left',self.image_callback, 10)
@@ -53,6 +58,11 @@ class CameraObjectDetectionNode(Node):
             detection_array_msg = Detection2DArray()    # ROS 2 message container for multiple 2D object detections
             detection_array_msg.header = msg.header     # Set the header of the detection array to match the incoming image message's header (for timestamp and frame information)
             
+            # Extract header parameters outside the bounding box loops
+            sec = msg.header.stamp.sec
+            nanosec = msg.header.stamp.nanosec
+            frame_id_str = msg.header.frame_id
+            
             # do every result.boxes in the detection result
             for box in result.boxes:
                 x_center, y_center, width, height = box.xywh[0].tolist()        # get box size
@@ -65,7 +75,11 @@ class CameraObjectDetectionNode(Node):
                 #     f"[YOLO detected] no.: {len(result.boxes)} | "
                 #     f"class_name: {class_name} | confidence: {confidence}"
                 # )
-
+                self.db.log_detection(
+                    sec, nanosec, frame_id_str, class_name, confidence, 
+                    x_center, y_center, width, height
+                )
+                
                 # create a Detection2D message for each detected object
                 detection = Detection2D()
                 detection.header = msg.header
@@ -83,7 +97,10 @@ class CameraObjectDetectionNode(Node):
                 detection.results.append(hypothesis)
            
                 detection_array_msg.detections.append(detection)
-                
+            
+            # Frame ended processing, execute a batch database disk write commit
+            self.db.commit_frame()
+            
             self.pub_detection.publish(detection_array_msg)                     # Publish the detection results to the /camera/object_detections topic
             
             annotated_frame = result.plot()                                                     # Draw the bounding boxes and labels on the original image for visualization
@@ -94,12 +111,22 @@ class CameraObjectDetectionNode(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to convert image: {e}")
 
+    def destroy_node(self):
+        # Disconnect from database gracefully on termination sequences
+        self.db.close()
+        super().destroy_node()
+        
 def main(args=None):
     rclpy.init(args=args)               # init ROS 2 Python client library
     node = CameraObjectDetectionNode()  # Instantiate your custom node class 
-    rclpy.spin(node)                    # This keeps the node alive to listen for events. It constantly processes incoming data
-    node.destroy_node()                 # When the user presses Ctrl+C, rclpy.spin() unblocks. This line cleanups the node 
-    rclpy.shutdown()                    # This cleanly disconnects the application from the ROS 2 graph and releases all system resources
+    
+    try:
+        rclpy.spin(node)                    # This keeps the node alive to listen for events. It constantly processes incoming data
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()                 # When the user presses Ctrl+C, rclpy.spin() unblocks. This line cleanups the node 
+        rclpy.shutdown()                    # This cleanly disconnects the application from the ROS 2 graph and releases all system resources
     
 if __name__ == '__main__':
     main()
