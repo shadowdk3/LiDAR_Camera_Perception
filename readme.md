@@ -4,6 +4,11 @@ This project implements a real-time 3D multi-object tracking and sensor fusion p
 
 ![demo](./reference/demo.gif)
 
+## Environment
+
+* **OS:** Ubuntu 24.04 LTS
+* **ROS 2 Version:** Jazzy Jalisco (Python 3.12)
+
 ## Core Features
 
 *   **Data Replay**: Leverages `ros2bag` to replay and process recorded sensor data streams.
@@ -77,6 +82,74 @@ graph LR
     classDef lidar fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px;
     classDef camera fill:#f1f8e9,stroke:#7cb342,stroke-width:2px;
     classDef fusion fill:#fff3e0,stroke:#fb8c00,stroke-width:2px,stroke-dasharray: 5 5;
+```
+
+## Setup
+
+### Repository for KITTI publisher
+
+* Navigate to your ROS 2 workspace's source directory and clone this project:
+
+```
+git clone https://github.com/umtclskn/ros2_kitti_publishers.git
+```
+
+* Recommend make it to ros2bag
+
+### Install System Dependencies
+
+* Install the required system tools and development libraries:
+
+```
+sudo apt update
+sudo apt install libpcap-dev ros-jazzy-cv-bridge -y
+```
+
+### Configure the Python Virtual Environment
+
+* Create the venv inside your home directory
+
+```
+python3 -m venv --system-site-packages ~/ros2_venv
+source ~/ros2_venv/bin/activate
+```
+
+* Upgrade package management tools
+
+```
+pip install --upgrade pip setuptools
+```
+
+* Resolve dependency conflicts for ROS 2 Jazzy core packages
+
+```
+pip install pyyaml jinja2 typeguard
+```
+
+* Install ROS 2 build tools and external ML frameworks, version of numpy for Yolo need <2, and make opencv compatible with numpy <2
+
+```
+pip install ultralytics catkin_pkg
+pip install "numpy<2"
+pip install "opencv-python<4.10.0"
+```
+
+* Pip check
+
+```
+pip check
+```
+
+should show 
+
+```
+No broken requirements found.
+```
+
+* Verify
+
+```
+python3 -c "import catkin_pkg; print(catkin_pkg.__file__)"
 ```
 
 -------------------------------------
