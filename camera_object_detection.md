@@ -1,6 +1,7 @@
-# Camera Object Detection with YOLOv11
+# Camera Object Detection
 ----------------------------------
 
+## YOLOv11
 - Run object detection on camera input
 
 - Core Flow
@@ -111,3 +112,15 @@ ros2 bag play kitti_dataset_0009
 ```
 
 ![camer_object_detection](./reference/camer_object_detection.gif)
+
+## Pytorch
+
+- Faster R-CNN (COCO 91 classes)
+
+Run object detection for pytorch object detection
+
+```
+ros2 run lidar_camera_perception pytorch_camera_object_detection.py
+```
+
+![pytorch_detection](./reference/pytorch_detection.png)
