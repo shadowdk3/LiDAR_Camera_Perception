@@ -9,7 +9,10 @@ This project implements a real-time 3D multi-object tracking and sensor fusion p
 
 * **OS:** Ubuntu 24.04 LTS
 * **ROS 2 Version:** Jazzy Jalisco (Python 3.12)
-
+* Database: PostgreSQL 16+ with PostGIS extension (required for 2D spatial polygon handling)
+* Containerization: Docker Engine (v20.10+) & Docker Compose v2+
+* Python Dependencies: psycopg2 (or psycopg2-binary)
+  
 ## Core Features
 
 *   **Data Replay**: Leverages `ros2bag` to replay and process recorded sensor data streams.
@@ -50,24 +53,28 @@ The node automatically re-maps traffic categories depending on your selected run
 | `stop_sign` | 11 | 12 |
 
 ## Pipeline Architecture
-
 ```mermaid
-graph LR
+graph TD
     %% Nodes
-    Bag[ros2bag]:::input
+    Bag[ros2bag Input]:::input
     
-    subgraph LiDAR Pipeline
-        L_Cloud[LiDAR Cloud]:::lidar
+    subgraph LiDAR Pipeline [LiDAR Processing]
+        L_Cloud[LiDAR Point Cloud]:::lidar
         PCL[PCL Segmentation & Clustering]:::lidar
         KF[Kalman Filter 3D Tracking]:::lidar
     end
     
-    subgraph Camera Pipeline
+    subgraph Camera Pipeline [Vision Processing]
         Cam_Img[Camera Image]:::camera
-        YOLO[YOLOv11 2D Detection]:::camera
+        YOLO[YOLOv11 / Faster R-CNN]:::camera
     end
     
-    Fusion[2D-3D IoU Fusion & Visualization]:::fusion
+    Fusion[2D-3D IoU Fusion Node]:::fusion
+    
+    subgraph Storage & Analytics Pipeline [Data & BI Layer]
+        DB[(PostgreSQL + PostGIS)]:::storage
+        BI[Metabase Dashboard]:::analytics
+    end
 
     %% Connections
     Bag --> L_Cloud
@@ -80,13 +87,26 @@ graph LR
     Cam_Img --> YOLO
     YOLO -->|2D Bounding Boxes| Fusion
 
+    %% Database & BI Stream
+    Fusion -->|psycopg2: Insert bounding box geometry & metadata| DB
+    DB -->|SQL Queries / Direct Connection| BI
+
     %% Styles
     classDef input fill:#eceff1,stroke:#37474f,stroke-width:2px;
     classDef lidar fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px;
     classDef camera fill:#f1f8e9,stroke:#7cb342,stroke-width:2px;
     classDef fusion fill:#fff3e0,stroke:#fb8c00,stroke-width:2px,stroke-dasharray: 5 5;
+    classDef storage fill:#ede7f6,stroke:#5e35b1,stroke-width:2px;
+    classDef analytics fill:#fce4ec,stroke:#d81b60,stroke-width:2px;
 ```
 
+### Architectural Pipeline Breakdown
+1. **Perception Feed**: `ros2bag` synchronizes and broadcasts raw LiDAR point clouds and high-resolution camera frames.
+2. **LiDAR Subsystem**: The Point Cloud Library (PCL) handles ground plane RANSAC segmentation and Euclidean clustering. A Kalman Filter assigns and tracks unique spatial IDs over multi-frame timelines.
+3. **Vision Subsystem**: Neural object detection inference (YOLOv11 or Faster R-CNN) generates 2D image coordinates.
+4. **Data Fusion**: Geometric matrices map 3D boundaries into 2D projections. Greedy Hungarian-like IoU algorithms align AI semantic classifications with 3D targets.
+5. **Analytics Injection**: The fusion pipeline utilizes a custom Python `DatabaseLogger` class via `psycopg2` to convert bounding box centers and extents into standard WKT format geometries (`POLYGON`), logging data frames safely into PostgreSQL for live Business Intelligence (BI) insights.
+   
 ## Setup
 
 ### Repository for KITTI publisher
