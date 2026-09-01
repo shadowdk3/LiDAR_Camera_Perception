@@ -3,7 +3,7 @@
 This project implements a real-time 3D multi-object tracking and sensor fusion pipeline using **ROS2**, combining **LiDAR point clouds** and **camera images** for robust environment perception.
 
 ![demo](./reference/demo.gif)
-![group_data2](./reference/group_data2.gif)
+![group_data2](./reference/group_data2.png)
 
 ## Environment
 
@@ -21,7 +21,7 @@ This project implements a real-time 3D multi-object tracking and sensor fusion p
 *   **3D Multi-Object Tracking**: Applies a **Kalman Filter** tracker to maintain identities (Track IDs) across frames.
 *   **LiDAR-Camera Fusion**: Projects 3D tracking boxes onto 2D image planes using a geometric extrinsic-intrinsic chain, performing IoU matching to bind YOLO semantic labels onto 3D LiDAR tracks.
 *   **Database Logging**: Streams and records real-time object tracking metadata into a PostgreSQL data warehouse under the camera_yolo_detections table for persistent telemetry storage.
-*   **BI Data Visualization***: Connects Metabase to the PostgreSQL database to effortlessly create interactive charts, monitor detection frequency, and analyze AI inferences without writing SQL.
+*   **BI Data Visualization**: Connects Metabase to the PostgreSQL database to effortlessly create interactive charts, monitor detection frequency, and analyze AI inferences without writing SQL.
 
 ## Learning Objectives
 
