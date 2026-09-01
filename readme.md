@@ -3,6 +3,7 @@
 This project implements a real-time 3D multi-object tracking and sensor fusion pipeline using **ROS2**, combining **LiDAR point clouds** and **camera images** for robust environment perception.
 
 ![demo](./reference/demo.gif)
+![group_data2](./reference/group_data2.gif)
 
 ## Environment
 
@@ -19,6 +20,8 @@ This project implements a real-time 3D multi-object tracking and sensor fusion p
 *   **Object Clustering**: Groups isolated 3D points into distinct object clusters using PCL.
 *   **3D Multi-Object Tracking**: Applies a **Kalman Filter** tracker to maintain identities (Track IDs) across frames.
 *   **LiDAR-Camera Fusion**: Projects 3D tracking boxes onto 2D image planes using a geometric extrinsic-intrinsic chain, performing IoU matching to bind YOLO semantic labels onto 3D LiDAR tracks.
+*   **Database Logging**: Streams and records real-time object tracking metadata into a PostgreSQL data warehouse under the camera_yolo_detections table for persistent telemetry storage.
+*   **BI Data Visualization***: Connects Metabase to the PostgreSQL database to effortlessly create interactive charts, monitor detection frequency, and analyze AI inferences without writing SQL.
 
 ## Learning Objectives
 
@@ -29,7 +32,7 @@ By developing this project, the primary technical goals and core competencies ac
 *   **3D Point Cloud Processing**: Gained hands-on experience with the **Point Cloud Library (PCL)** for ground plane segmentation (RANSAC) and Euclidean cluster extraction.
 *   **State Estimation & Tracking**: Understood and applied **Kalman Filtering** to track moving obstacles in 3D space, ensuring identity persistence (Track ID) under occlusion.
 *   **Modern ROS2 Architecture**: Designed and synchronized asynchronous node communication (Subscriptions, Synchronizers, and Custom Publishers) in a modular ROS2 ecosystem.
-*   **Deep Learning Deployment**: Integrated **YOLOv11** object detection inside a ROS2 Python/C++ pipeline to leverage real-time vision inferences.
+*   **Deep Learning Deployment**: Integrated YOLOv11 inferences into a live ROS2 pipeline and engineered a database sink to bridge real-time robotics metadata with Business Intelligence (BI) software.
 
 ## Execution Options & Class Mapping
 
