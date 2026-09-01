@@ -175,14 +175,14 @@ Once connected, you can use Metabase’s no-code graphical interface to build vi
 * Select your `camera_yolo_detections` data table.
 * Click through the query settings menu: `Summarize` -> `Summarize by` -> `Group by` -> `Class Name`.
 
-![group_data](./reference/group_data.gif)
-![group_data2](./reference/group_data2.gif)
+![group_data](./reference/group_data.png)
+![group_data2](./reference/group_data2.png)
 
 2. Select a Visualization Type
 
 * Go to the visualization selector in the bottom left corner and pick either `Pie` or `Bar` chart.
 
-![group_data_pie](./reference/group_data_pie.gif)
+![group_data_pie](./reference/group_data_pie.png)
 
 3. Configure Numeric Binning (If Applicable)
 
@@ -192,5 +192,5 @@ Once connected, you can use Metabase’s no-code graphical interface to build vi
     * 50 bins (Divide data into 50 intervals)
     * Don't bin (Keep individual raw values)
 
-![bin_8](./reference/bin_8.gif)
-![bin_10](./reference/bin_10.gif)
+![bin_8](./reference/bin_8.png)
+![bin_10](./reference/bin_10.png)
