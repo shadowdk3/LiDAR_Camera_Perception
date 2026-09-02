@@ -91,7 +91,9 @@ A modular perception pipeline that combines 2D object detection (YOLO) with LiDA
    # [x, y, z, length, width, height, yaw]
    bounding_box_7d = [12.5, 1.2, -0.5, 4.2, 1.8, 1.5, 0.15]
    ```
-   
+
+5. **Loss Calculation & Optimization Validation:** Computes Smooth L1 Loss (F.smooth_l1_loss) between the model's 7D regression outputs and aligned ground truth targets to evaluate prediction errors and validate gradient-ready optimization loops.
+
 ---------------------------
 
 ## Issue
