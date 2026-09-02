@@ -65,13 +65,33 @@ A modular perception pipeline that combines 2D object detection (YOLO) with LiDA
 
 ### Pipeline Architecture
 
+- test_frustum_crop.py
+
 1. **2D Detection:** YOLOv8 detects objects in synchronized RGB images and extracts 2D bounding boxes $(u_1, v_1, u_2, v_2)$.
 2. **Calibration & Projection:** Loads raw KITTI calibration files (`calib_velo_to_cam.txt`, `calib_cam_to_cam.txt`) and pre-computes the unified 3D-to-2D projection matrix:
    $$\mathbf{M}_{\text{proj}} = \mathbf{P}_{\text{rect\_02}} \times \mathbf{R}_{\text{rect\_00}} \times \mathbf{T}_{\text{velo\_to\_cam0}}$$
 3. **Frustum Cropping:** Projects LiDAR points onto the image plane, filters out points behind the camera ($Z \le 0$), and isolates 3D points falling within each YOLO 2D bounding box.
 4. **3D Box Estimation:** Feeds the cropped 3D frustum point cloud into Frustum PointNet to regress oriented 3D bounding boxes.
 
+- frustum_pointnet_pipeline.py
 
+1. **Core Purpose:** End-to-end prototype validating a Frustum-to-Voxel 3D object detection framework.
+
+2. **2D-3D Cross-Domain Integration:** Leverages YOLOv11 for 2D bounding box detection and applies KITTI calibration matrices to project and crop corresponding LiDAR 3D point cloud frustums.
+
+3. **Data Normalization & Batch Alignment:** Applies local zero-centering to cropped point clouds, standardizing dynamic point counts into a fixed tensor shape of (Batch, 512, 3) via random sampling and zero-padding.
+
+4. **PyTorch Tensor Flow Validation:** Tests the custom SimpleFrustumPointNet model to ensure proper tensor ingestion, feature extraction, and regression head output for 7D 3D bounding box parameters.
+
+   - Center Coordinates ($x, y, z$): The 3D center position of the object relative to the sensor frame in meters (e.g., $x = 12.5$, $y = 1.2$, $z = -0.5$).
+   - Dimensions ($l, w, h$): The physical size of the object in meters, representing length, width, and height (e.g., length $= 4.2$, width $= 1.8$, height $= 1.5$ for a sedan).
+   - Orientation ($\theta$): The yaw rotation angle around the vertical axis in radians (e.g., $\theta = 0.15$).
+
+   ```
+   # [x, y, z, length, width, height, yaw]
+   bounding_box_7d = [12.5, 1.2, -0.5, 4.2, 1.8, 1.5, 0.15]
+   ```
+   
 ---------------------------
 
 ## Issue
