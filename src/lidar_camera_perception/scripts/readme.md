@@ -53,8 +53,18 @@ sudo apt update && sudo apt install -y libgles2 libgles2-mesa-dev
 ```
 script/
 ├── test_frustum_crop.py         # Main test script for projection, frustum extraction, and Open3D visualization
+├── frustum_pointnet_pipeline.py # Serves as a visualization tool for pipeline validation and single-frame inspection
+├── data_clean_KITTI.py          # KITTI 3D Tracklet Cleaner and Visualizer
 └── README.md
 ```
+
+## Learning Objective
+
+- **Data Cleaning & Quality Control (data_clean_KITTI.py):** Master XML DOM manipulation and geometric depth validation to programmatically detect and strip degenerate bounding box poses ($Z \le 0.1$) while preserving dataset structure.
+
+- **Sensor Fusion & Geometric Projection (test_frustum_crop.py):** Learn how to chain extrinsic, rectification, and projection calibration matrices to map LiDAR point clouds into camera image planes and crop 2D-guided 3D frustums.
+
+- **3D Deep Learning & Regression (frustum_pointnet_pipeline.py):** Understand how to normalize dynamic point clouds into fixed-shape tensors via zero-centering and padding, and train a neural network to regress 7D bounding box parameters using Smooth L1 Loss.
 
 ## LiDAR-Camera Fusion & Frustum PointNet 3D Detection
 
@@ -65,7 +75,7 @@ A modular perception pipeline that combines 2D object detection (YOLO) with LiDA
 
 ### Pipeline Architecture
 
-- test_frustum_crop.py
+### test_frustum_crop.py
 
 1. **2D Detection:** YOLOv8 detects objects in synchronized RGB images and extracts 2D bounding boxes $(u_1, v_1, u_2, v_2)$.
 2. **Calibration & Projection:** Loads raw KITTI calibration files (`calib_velo_to_cam.txt`, `calib_cam_to_cam.txt`) and pre-computes the unified 3D-to-2D projection matrix:
@@ -73,7 +83,11 @@ A modular perception pipeline that combines 2D object detection (YOLO) with LiDA
 3. **Frustum Cropping:** Projects LiDAR points onto the image plane, filters out points behind the camera ($Z \le 0$), and isolates 3D points falling within each YOLO 2D bounding box.
 4. **3D Box Estimation:** Feeds the cropped 3D frustum point cloud into Frustum PointNet to regress oriented 3D bounding boxes.
 
-- frustum_pointnet_pipeline.py
+### frustum_pointnet_pipeline.py
+
+Serves as a visualization tool for pipeline validation and single-frame inspection.
+
+Can be run directly whenever you want to quickly check if data alignment, YOLO detection results, or 3D bounding box projections are implemented correctly.
 
 1. **Core Purpose:** End-to-end prototype validating a Frustum-to-Voxel 3D object detection framework.
 
@@ -93,6 +107,22 @@ A modular perception pipeline that combines 2D object detection (YOLO) with LiDA
    ```
 
 5. **Loss Calculation & Optimization Validation:** Computes Smooth L1 Loss (F.smooth_l1_loss) between the model's 7D regression outputs and aligned ground truth targets to evaluate prediction errors and validate gradient-ready optimization loops.
+
+### data_clean_KITTI.py
+
+KITTI 3D Tracklet Cleaner and Visualizer. This script processes KITTI dataset tracklet XML files by:
+
+1. **Core Purpose:** Parses KITTI dataset 3D tracklet XML files, extracting fundamental object dimensions (height, width, length) and sequential trajectory motion poses.
+
+2. **Coordinate Transformation:** Applies extrinsic calibration and rectification matrices (such as velo_to_cam0_ext and projection matrices) to map 3D bounding box corner vertices accurately into the camera coordinate system.
+
+3. **Depth Verification & Filtering:** Inspects the camera-frame depth coordinate ($Z$) of every box vertex to identify projection anomalies, stray artifacts, or objects positioned too close to the sensor.
+
+- validation Condition: depth (Z <= 0.1)
+
+4. **XML Sanitization & Persistence:** Automatically targets and removes invalid inner pose entries (pose_item) directly from the XML Document Object Model (DOM) tree without breaking file structure, then saves the updated file as a cleaned dataset.
+
+5. **Synchronization & Visualization:** Projects valid 3D bounding box coordinates onto synchronized 2D camera image planes and renders complete 12-edge wireframes for qualitative pipeline inspection.
 
 ---------------------------
 
