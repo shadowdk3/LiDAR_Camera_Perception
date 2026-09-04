@@ -7,11 +7,12 @@ This project implements a real-time 3D multi-object tracking and sensor fusion p
 
 ## Environment
 
-* **OS:** Ubuntu 24.04 LTS
+* **OS:** Ubuntu 24.04 LTS (WSL2 compatible)
 * **ROS 2 Version:** Jazzy Jalisco (Python 3.12)
-* Database: PostgreSQL 16+ with PostGIS extension (required for 2D spatial polygon handling)
-* Containerization: Docker Engine (v20.10+) & Docker Compose v2+
-* Python Dependencies: psycopg2 (or psycopg2-binary)
+* **CUDA Version:** 12.1 (for PyTorch deep learning workloads)
+* **Database:** PostgreSQL 16+ with PostGIS extension (required for 2D spatial polygon handling)
+* **Containerization:** Docker Engine (v20.10+) & Docker Compose v2+
+* **Python Dependencies:** psycopg2, open3d, ultralytics, torch/torchvision
   
 ## Core Features
 
@@ -19,6 +20,7 @@ This project implements a real-time 3D multi-object tracking and sensor fusion p
 *   **2D Object Detection**: Detect and classify 2D objects in camera frames.
     *   **Option 1: YOLOv11**: Optimized single-stage detector delivering high frame rates on edge hardware.
     *   **Option 2: PyTorch Faster R-CNN**: Robust two-stage regional proposal network utilizing official weights pre-trained on **COCO 91 classes**.
+* **Frustum-to-Voxel 3D Detection**: Uses 2D YOLO bounding boxes to crop raw LiDAR point clouds into localized frustums, dramatically reducing computational complexity before feeding them into **Frustum PointNet**.
 *   **3D Point Cloud Segmentation**: Employs **PCL (Point Cloud Library)** to filter out ground planes and isolate obstacles.
 *   **Object Clustering**: Groups isolated 3D points into distinct object clusters using PCL.
 *   **3D Multi-Object Tracking**: Applies a **Kalman Filter** tracker to maintain identities (Track IDs) across frames.
