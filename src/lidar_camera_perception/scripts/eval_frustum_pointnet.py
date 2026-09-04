@@ -143,7 +143,7 @@ if __name__ == "__main__":
     # Initialize TensorBoard writer for evaluation/inference logging
     writer = SummaryWriter(log_dir='runs/frustum_pointnet_eval')
     
-    yolo = YOLO("/home/user/LiDAR_Camera_Perception_ws/yolo11n.pt")
+    yolo = YOLO("/home/user/LiDAR_Camera_Perception_ws/models/yolo11n.pt")
     results = yolo(img, verbose=False)[0]
     boxes = results.boxes.xyxy.cpu().numpy()
     clss = results.boxes.cls.cpu().numpy()
