@@ -16,6 +16,7 @@ import os
 import xml.etree.ElementTree as ET
 import torch.nn.functional as F
 from torch.utils.data import Dataset,DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 TARGET_CLASSES = {
     'person': 0,
@@ -219,8 +220,11 @@ if __name__ == "__main__":
     model = SimpleFrustumPointNet().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     
+    # Initialize TensorBoard writer
+    writer = SummaryWriter(log_dir='runs/frustum_pointnet_experiment')
+    
     best_loss = float('inf')
-    num_epochs = 30
+    num_epochs = 10
     
     # Training Loop across multiple epochs
     for epoch in range(num_epochs):
@@ -242,6 +246,9 @@ if __name__ == "__main__":
             
         avg_loss = epoch_loss / len(dataloader)
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}")
+        
+        # Log training loss to TensorBoard
+        writer.add_scalar('Loss/Train', avg_loss, epoch)
         
         if avg_loss < best_loss:
             best_loss = avg_loss

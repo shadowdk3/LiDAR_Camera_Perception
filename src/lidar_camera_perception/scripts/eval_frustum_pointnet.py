@@ -5,6 +5,8 @@ import torch
 import torch.nn as nn
 from ultralytics import YOLO
 import xml.etree.ElementTree as ET
+from torch.utils.tensorboard import SummaryWriter
+import torch.nn.functional as F
 
 TARGET_CLASSES = {
     'person': 0,
@@ -134,8 +136,12 @@ if __name__ == "__main__":
     
     # Load trained model weights
     model = SimpleFrustumPointNet().to(device)
-    model.load_state_dict(torch.load('frustum_pointnet_30epoch.pth'))
+    model.load_state_dict(torch.load('frustum_pointnet.pth'))
+    # model.load_state_dict(torch.load('frustum_pointnet_30epoch.pth'))
     model.eval()
+    
+    # Initialize TensorBoard writer for evaluation/inference logging
+    writer = SummaryWriter(log_dir='runs/frustum_pointnet_eval')
     
     yolo = YOLO("/home/user/LiDAR_Camera_Perception_ws/yolo11n.pt")
     results = yolo(img, verbose=False)[0]
@@ -143,6 +149,9 @@ if __name__ == "__main__":
     clss = results.boxes.cls.cpu().numpy()
     
     current_frame_idx = int(os.path.basename(img_path).split('.')[0])
+    
+    total_eval_loss = 0.0
+    valid_detections_count = 0
     
     # 1. Run inference and draw Predicted 3D Boxes (Red)
     with torch.no_grad():
@@ -180,15 +189,42 @@ if __name__ == "__main__":
                     # Draw Prediction in Red (B, G, R) -> (0, 0, 255)
                     img = draw_3d_box(img, pred_box, proj, (0, 0, 255))
 
+                    # Compute evaluation loss against matched ground truth if available
+                    for tracklet in annotations:
+                        pose_idx = current_frame_idx - tracklet['first_frame']
+                        if 0 <= pose_idx < len(tracklet['poses']):
+                            p = tracklet['poses'][pose_idx]
+                            gt_box = np.array([p['tx'], p['ty'], p['tz'], tracklet['l'], tracklet['w'], tracklet['h'], p['rz']], dtype=np.float32)
+                            gt_box[:3] -= centroid
+                            
+                            pred_tensor = torch.tensor(pred_box, dtype=torch.float32).unsqueeze(0)
+                            gt_tensor = torch.tensor(gt_box, dtype=torch.float32).unsqueeze(0)
+                            loss = F.smooth_l1_loss(pred_tensor, gt_tensor).item()
+                            
+                            total_eval_loss += loss
+                            valid_detections_count += 1
+                            break
+                 
     # 2. Draw Ground Truth 3D Boxes (Green) for comparison
-    for tracklet in annotations:
-        pose_idx = current_frame_idx - tracklet['first_frame']
-        if 0 <= pose_idx < len(tracklet['poses']):
-            p = tracklet['poses'][pose_idx]
-            gt_box = np.array([p['tx'], p['ty'], p['tz'], tracklet['l'], tracklet['w'], tracklet['h'], p['rz']], dtype=np.float32)
-            # Draw GT in Green -> (0, 255, 0)
-            img = draw_3d_box(img, gt_box, proj, (0, 255, 0))
-
+        for tracklet in annotations:
+            pose_idx = current_frame_idx - tracklet['first_frame']
+            if 0 <= pose_idx < len(tracklet['poses']):
+                p = tracklet['poses'][pose_idx]
+                gt_box = np.array([p['tx'], p['ty'], p['tz'], tracklet['l'], tracklet['w'], tracklet['h'], p['rz']], dtype=np.float32)
+                # Draw GT in Green -> (0, 255, 0)
+                img = draw_3d_box(img, gt_box, proj, (0, 255, 0))
+                       
+    if valid_detections_count > 0:
+        avg_eval_loss = total_eval_loss / valid_detections_count
+        print(f"=> Evaluation Smooth L1 Loss: {avg_eval_loss:.4f}")
+        writer.add_scalar('Loss/Eval', avg_eval_loss, 0)
+        
+    # Log visualized image frame directly into TensorBoard
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    writer.add_image('Visual/Predictions_vs_GT', img_rgb, 0, dataformats='HWC')
+    
+    writer.close()
+    
     cv2.imshow("Frustum PointNet 3D Detection (Red: Pred | Green: GT)", img)
     cv2.waitKey(0)
     cv2.destroyAllWindows()

@@ -126,7 +126,7 @@ KITTI 3D Tracklet Cleaner and Visualizer. This script processes KITTI dataset tr
 
 5. **Synchronization & Visualization:** Projects valid 3D bounding box coordinates onto synchronized 2D camera image planes and renders complete 12-edge wireframes for qualitative pipeline inspection.
 
-## train_frustum_pointnet.py
+### train_frustum_pointnet.py
 
 1. **Define PyTorch Dataset class:** Inherit from torch.utils.data.Dataset. Scan all image, LiDAR bin, and label paths in the KITTI directory within init, and implement single-frame YOLO detection, frustum point-cloud extraction, and padding to 512 points within getitem.
 
@@ -138,7 +138,7 @@ KITTI 3D Tracklet Cleaner and Visualizer. This script processes KITTI dataset tr
 
 5. **Save model weights:** Track the average loss of each epoch, and use torch.save(model.state_dict(), 'frustum_pointnet.pth') to save the weights to disk when achieving the best-performing (lowest loss) model.
 
-## eval_frustum_pointnet.py
+### eval_frustum_pointnet.py
 
 Computes quantitative evaluation metrics (Mean Smooth L1 Loss) across the validation dataset to objectively assess 3D bounding box regression accuracy instead of relying solely on visual checks.
 
@@ -149,6 +149,28 @@ Computes quantitative evaluation metrics (Mean Smooth L1 Loss) across the valida
 3. **Performance Benchmarking:** Feeds batched tensors through SimpleFrustumPointNet using loaded weights (frustum_pointnet_30epoch.pth) to output a standardized quantitative error score.
 
 ![eval_simple_pointnet](../../../reference/eval_simple_pointnet.png)
+
+
+## Visualizing Training and Evaluation with TensorBoard
+
+To monitor training loss curves and inspect 3D bounding box visual comparisons (Red: Predictions vs. Green: Ground Truth) interactively:
+
+1. **Launch the TensorBoard server from your workspace root:**
+
+```
+tensorboard --logdir=runs
+```
+
+2. Open your web browser and navigate to:
+
+```
+http://localhost:6006/
+```
+
+- Scalars Tab: Track Loss/Train progression per epoch and Loss/Eval metrics.
+- Images Tab: Inspect rendered Visual/Predictions_vs_GT image frames.
+
+![tensorboard_train_eval](../../../reference/tensorboard_train_eval.png)
 
 ---------------------------
 
