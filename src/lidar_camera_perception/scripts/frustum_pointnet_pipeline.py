@@ -207,7 +207,7 @@ if __name__ == "__main__":
     gt_annotations = parse_kitti_tracklets(label_path)
 
     velo_to_cam2_proj, velo_to_cam0_ext = read_kitti_calib()
-    yolo_model = YOLO("/home/user/LiDAR_Camera_Perception_ws/yolo11n.pt") 
+    yolo_model = YOLO("/home/user/LiDAR_Camera_Perception_ws/models/yolo11n.pt") 
     results = yolo_model(img)[0]
     
     boxes = results.boxes.xyxy.cpu().numpy()

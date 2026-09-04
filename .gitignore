@@ -1,0 +1,21 @@
+build/
+install/
+log/
+
+# Python bytecode cache
+__pycache__/
+**/__pycache__/
+
+# Training runs and output directories
+runs/
+**/runs/
+
+# training data and models
+data/
+models/
+
+# ros2 bag file
+kitti_dataset_0009/
+
+# this ext source from github
+src/ros2_kitti_publishers/

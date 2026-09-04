@@ -122,7 +122,7 @@ if __name__ == "__main__":
     velo_to_cam2_proj, velo_to_cam0_ext = read_kitti_calib()
     
     # Run YOLO to get 2D detection results
-    yolo_model = YOLO("/home/user/LiDAR_Camera_Perception_ws/yolo11n.pt") 
+    yolo_model = YOLO("/home/user/LiDAR_Camera_Perception_ws/models/yolo11n.pt") 
     results = yolo_model(img)[0]
     
     boxes = results.boxes.xyxy.cpu().numpy()  # Get [u1, v1, u2, v2]

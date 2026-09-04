@@ -28,7 +28,7 @@ class CameraObjectDetectionNode(Node):
         super().__init__('camera_object_detection_node')
 
         # YOLO setting
-        self.model = YOLO("yolo11n.pt")
+        self.model = YOLO("models/yolo11n.pt")
         self.confidence_threshold = 0.5
         
         # Initialize Database Logger instance
