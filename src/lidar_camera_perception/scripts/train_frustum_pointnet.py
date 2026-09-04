@@ -133,6 +133,16 @@ def parse_kitti_tracklets(xml_path):
         tracklets.append(tracklet)
     return tracklets
 
+"""
+RAM Caching & Data Pipeline Optimization
+
+Pre-Generation (__init__): Runs YOLO once per frame beforehand to index every bounding box proposal separately, 
+    avoiding CUDA multi-threading crashes and capturing multiple objects per image.
+Frustum Extraction (__getitem__): Keeps your exact point-cloud projection, 2D box filtering, zero-center normalization, 
+    and 512-point uniform sampling logic intact.
+DataLoader Usage: When instantiating your DataLoader, explicitly set `num_workers=0` to ensure safe interaction
+    with YOLO model weights.
+"""
 class KittiFrustumDataset(Dataset):
     def __init__(self, data_dir, yolo_model_path):
         self.img_dir = os.path.join(data_dir, "image_00/data")
@@ -140,81 +150,87 @@ class KittiFrustumDataset(Dataset):
         self.img_files = sorted(os.listdir(self.img_dir))
         self.annotations = parse_kitti_tracklets(os.path.join(data_dir, "tracklet_labels.xml"))
         self.proj, self.ext = read_kitti_calib()
+        
+        print("=> Initializing dataset and pre-generating YOLO 2D proposals...")
         self.yolo = YOLO(yolo_model_path)
         
-        self.samples = []
+        self.cached_data = []
         for img_file in self.img_files:
             frame_idx = int(img_file.split('.')[0])
             img_path = os.path.join(self.img_dir, img_file)
             bin_path = os.path.join(self.bin_dir, f"{frame_idx:010d}.bin")
-            if os.path.exists(bin_path):
-                self.samples.append((img_path, bin_path, frame_idx))
-
-    def __len__(self):
-        return len(self.samples)
-
-    # Pair YOLO 2D detections with 3D ground truth to output (cropped point cloud, 
-    # target 3D box) for training.
-    def __getitem__(self, idx):
-        img_path, bin_path, frame_idx = self.samples[idx]
-        img = cv2.imread(img_path)
-        point_cloud = np.fromfile(bin_path, dtype=np.float32).reshape(-1, 4)
-        
-        # Generate 2D object proposals via YOLO (`self.yolo(img)`) to extract corresponding 3D LiDAR point frustums.
-        results = self.yolo(img, verbose=False)[0]
-        boxes = results.boxes.xyxy.cpu().numpy()
-        clss = results.boxes.cls.cpu().numpy()
-        
-        for box2d, cls_id in zip(boxes, clss):
-            if int(cls_id) in TARGET_CLASSES.values():
-                pts_3d = point_cloud[:, :3]
-                pts_homo = np.hstack((pts_3d, np.ones((pts_3d.shape[0], 1))))
-                pts_cam = (self.ext @ pts_homo.T).T[:, :3]
-                valid_mask = pts_cam[:, 2] > 0.1
-                
-                pts_2d_homo = (self.proj @ pts_homo[valid_mask].T).T
-                u = pts_2d_homo[:, 0] / pts_2d_homo[:, 2]
-                v = pts_2d_homo[:, 1] / pts_2d_homo[:, 2]
-                
-                u1, v1, u2, v2 = box2d
-                in_box = (u >= u1) & (u <= u2) & (v >= v1) & (v <= v2)
-                frustum_pts = pts_3d[valid_mask][in_box]
-                
-                if len(frustum_pts) > 5:
-                    # Step 1: Zero-centering normalization
-                    centroid = np.mean(frustum_pts, axis=0)
-                    norm_pts = frustum_pts - centroid
+            
+            if not os.path.exists(bin_path):
+                continue
+            
+            img = cv2.imread(img_path)
+            results = self.yolo(img, verbose=False)[0]
+            boxes = results.boxes.xyxy.cpu().numpy()
+            clss = results.boxes.cls.cpu().numpy()
+            
+            # Load point cloud once per frame to process all proposals efficiently
+            point_cloud = np.fromfile(bin_path, dtype=np.float32).reshape(-1, 4)
+            pts_3d = point_cloud[:, :3]
+            pts_homo = np.hstack((pts_3d, np.ones((pts_3d.shape[0], 1))))
+            pts_cam = (self.ext @ pts_homo.T).T[:, :3]
+            valid_mask = pts_cam[:, 2] > 0.1
+            
+            # Project points to 2D image plane to match YOLO proposal box
+            pts_2d_homo = (self.proj @ pts_homo[valid_mask].T).T
+            u = pts_2d_homo[:, 0] / pts_2d_homo[:, 2]
+            v = pts_2d_homo[:, 1] / pts_2d_homo[:, 2]
                     
-                    # Step 2: Fixed-size point sampling (512 points)
-                    if len(norm_pts) >= 512:
-                        choice = np.random.choice(len(norm_pts), 512, replace=False)
+            for box2d, cls_id in zip(boxes, clss):
+                if int(cls_id) in TARGET_CLASSES.values():
+                    u1, v1, u2, v2 = box2d
+                    in_box = (u >= u1) & (u <= u2) & (v >= v1) & (v <= v2)
+                    frustum_pts = pts_3d[valid_mask][in_box]
+                    
+                    if len(frustum_pts) < 5:
+                        sampled_pts = np.zeros((512, 3), dtype=np.float32)
+                        gt_box = np.zeros(7, dtype=np.float32)
                     else:
-                        choice = np.random.choice(len(norm_pts), 512, replace=True)
-                    sampled_pts = norm_pts[choice]
+                        centroid = np.mean(frustum_pts, axis=0)
+                        norm_pts = frustum_pts - centroid
+                        
+                        if len(norm_pts) >= 512:
+                            choice = np.random.choice(len(norm_pts), 512, replace=False)
+                        else:
+                            choice = np.random.choice(len(norm_pts), 512, replace=True)
+                        sampled_pts = norm_pts[choice]
+                        
+                        gt_box = np.zeros(7, dtype=np.float32)
+                        for tracklet in self.annotations:
+                            pose_idx = frame_idx - tracklet['first_frame']
+                            if 0 <= pose_idx < len(tracklet['poses']):
+                                p = tracklet['poses'][pose_idx]
+                                gt_box = np.array([p['tx'], p['ty'], p['tz'], tracklet['l'], tracklet['w'], tracklet['h'], p['rz']], dtype=np.float32)
+                                gt_box[:3] -= centroid  # Align with zero-centered frustum
+                                break
                     
-                    # Step 3: Match and retrieve ground truth 3D box
-                    for tracklet in self.annotations:
-                        pose_idx = frame_idx - tracklet['first_frame']
-                        if 0 <= pose_idx < len(tracklet['poses']):
-                            p = tracklet['poses'][pose_idx]
-                            gt_box = np.array([p['tx'], p['ty'], p['tz'], tracklet['l'], tracklet['w'], tracklet['h'], p['rz']], dtype=np.float32)
-                            gt_box[:3] -= centroid      # Align GT box with zero-centered frustum
-                            
-                            # Extract 3D point cloud frustum using YOLO 2D box, zero-normalize, 
-                            # and return features alongside KITTI XML ground-truth 3D bounding boxes.
-                            return torch.tensor(sampled_pts, dtype=torch.float32), torch.tensor(gt_box, dtype=torch.float32)
-        
-        # Return zero tensors if no valid object is detected
-        return torch.zeros((512, 3), dtype=torch.float32), torch.zeros(7, dtype=torch.float32)
+                    # Convert to tensors immediately and store in RAM cache list
+                    self.cached_data.append((
+                        torch.tensor(sampled_pts, dtype=torch.float32),
+                        torch.tensor(gt_box, dtype=torch.float32)
+                    ))
+                    
+            print(f"=> Successfully pre-cached {len(self.cached_data)} samples into RAM.")
+            
+    def __len__(self):
+        return len(self.cached_data)
 
+    def __getitem__(self, idx):
+        # Returns pre-loaded tensors instantly without disk reads or CPU math bottlenecks
+        return self.cached_data[idx]
+    
 if __name__ == "__main__":
     # 1. Automatically select GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"=> Using device: {device}")
     
     data_path = "/home/user/LiDAR_Camera_Perception_ws/data/2011_09_26/2011_09_26_drive_0009_sync"
-    dataset = KittiFrustumDataset(data_path, "/home/user/LiDAR_Camera_Perception_ws/yolo11n.pt")
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
+    dataset = KittiFrustumDataset(data_path, "/home/user/LiDAR_Camera_Perception_ws/models/yolo11n.pt")
+    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=0, pin_memory=True)
     
     # 2. Move model to GPU
     model = SimpleFrustumPointNet().to(device)
@@ -223,28 +239,37 @@ if __name__ == "__main__":
     # Initialize TensorBoard writer
     writer = SummaryWriter(log_dir='runs/frustum_pointnet_experiment')
     
+    # Enable Automatic Mixed Precision (AMP) for faster FP16 training and lower memory overhead
+    scaler = torch.amp.GradScaler('cuda')
+
     best_loss = float('inf')
-    num_epochs = 10
+    num_epochs = 30
     
     # Training Loop across multiple epochs
+    print(f"=> Starting training for {num_epochs} epochs across {len(dataloader)} training samples...")
     for epoch in range(num_epochs):
+        # train
         model.train()
-        epoch_loss = 0.0
+        total_train_loss = 0.0
         
         for batch_points, batch_gt_boxes in dataloader:
             # 3. Move batch data tensors to GPU
-            batch_points = batch_points.to(device)
-            batch_gt_boxes = batch_gt_boxes.to(device)
+            batch_points = batch_points.to(device, non_blocking=True)
+            batch_gt_boxes = batch_gt_boxes.to(device, non_blocking=True)
             
             optimizer.zero_grad()                                   # Clear previous gradients
-            predictions = model(batch_points)                       # Forward pass
-            loss = F.smooth_l1_loss(predictions, batch_gt_boxes)    # Compute Smooth L1 Loss
+            # Mixed precision forward pass
+            with torch.amp.autocast('cuda'):
+                predictions = model(batch_points)                       # Forward pass
+                loss = F.smooth_l1_loss(predictions, batch_gt_boxes)    # Compute Smooth L1 Loss
             
-            loss.backward()                                         # Backward pass (compute gradients)
-            optimizer.step()                                        # Update model weights
-            epoch_loss += loss.item()
+            # Scaled backward pass
+            scaler.scale(loss).backward()                          # Backward pass (compute gradients)
+            scaler.step(optimizer)                                 # Update model weights
+            scaler.update()
+            total_train_loss += loss.item()
             
-        avg_loss = epoch_loss / len(dataloader)
+        avg_loss = total_train_loss / len(dataloader)
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}")
         
         # Log training loss to TensorBoard

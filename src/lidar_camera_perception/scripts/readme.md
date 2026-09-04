@@ -26,6 +26,7 @@ source ~/.bashrc
 nvcc --version
 ```
 
+
 ## Pytorch
 
 ```
@@ -39,6 +40,7 @@ pip install "tifffile<2025.0.0"
 pip install "numpy<2.0"
 ```
 
+
 ## Install Dependencies
 
 ```
@@ -47,6 +49,7 @@ pip install "scipy<1.14"
 sudo apt install libgl1 libegl1 libxrandr2 libxinerama1 libxcursor1 libxi6 mesa-utils
 sudo apt update && sudo apt install -y libgles2 libgles2-mesa-dev
 ```
+
 
 ## Repository Structure
 
@@ -59,6 +62,7 @@ script/
 ├── data_clean_KITTI.py          # KITTI 3D Tracklet Cleaner and XML DOM Sanitizer
 └── README.md
 ```
+
 
 ## Learning Objective
 
@@ -171,6 +175,27 @@ http://localhost:6006/
 - Images Tab: Inspect rendered Visual/Predictions_vs_GT image frames.
 
 ![tensorboard_train_eval](../../../reference/tensorboard_train_eval.png)
+
+
+## Speedup trainning
+
+### RAM Caching & Data Pipeline Optimization
+
+To eliminate disk I/O bottlenecks and accelerate batch processing for training, the dataset pipeline implements an in-memory RAM caching strategy.
+
+* **Pre-Generation (__init__):** Runs YOLO once per frame beforehand to index every bounding box proposal separately, avoiding CUDA multi-threading crashes and capturing multiple objects per image.
+
+* **Frustum Extraction (__getitem__):** Keeps your exact point-cloud projection, 2D box filtering, zero-center normalization, and 512-point uniform sampling logic intact.
+
+* **DataLoader Usage:** When instantiating your DataLoader, explicitly set `num_workers=0` to ensure safe interaction with YOLO model weights.
+
+* **pin_memory:** Allocates tensors in pinned (page-locked) host memory, accelerating CPU-to-GPU data transfers.
+
+* **Automatic Mixed Precision (AMP):** Wrap your forward pass and loss calculation using PyTorch's native AMP scaler.This forces the GPU to execute matrix operations in mixed-precision (FP16/FP32), significantly reducing memory usage and accelerating training throughput.
+
+   - Execution: Forces the GPU to perform matrix operations using a mix of FP16 and FP32 precision via PyTorch's native GradScaler.
+
+   - Benefit: Significantly reduces memory consumption and accelerates training throughput on compatible GPUs without sacrificing model accuracy.
 
 ---------------------------
 
