@@ -148,7 +148,7 @@ Computes quantitative evaluation metrics (Mean Smooth L1 Loss) across the valida
 
 3. **Performance Benchmarking:** Feeds batched tensors through SimpleFrustumPointNet using loaded weights (frustum_pointnet_30epoch.pth) to output a standardized quantitative error score.
 
-![eval_simple_pointnet](./reference/eval_simple_pointnet.png)
+![eval_simple_pointnet](../../../reference/eval_simple_pointnet.png)
 
 ---------------------------
 
