@@ -55,6 +55,7 @@ script/
 ├── test_frustum_crop.py         # Main test script for projection, frustum extraction, and Open3D visualization
 ├── frustum_pointnet_pipeline.py # Validation tool for pipeline inspection and single-frame testing
 ├── train_frustum_pointnet.py    # End-to-end training loop script with checkpoint saving
+├── eval_frustum_pointnet.py     # Quantitative evaluation script calculating Mean Smooth L1 Loss across validation data
 ├── data_clean_KITTI.py          # KITTI 3D Tracklet Cleaner and XML DOM Sanitizer
 └── README.md
 ```
@@ -125,7 +126,6 @@ KITTI 3D Tracklet Cleaner and Visualizer. This script processes KITTI dataset tr
 
 5. **Synchronization & Visualization:** Projects valid 3D bounding box coordinates onto synchronized 2D camera image planes and renders complete 12-edge wireframes for qualitative pipeline inspection.
 
-
 ## train_frustum_pointnet.py
 
 1. **Define PyTorch Dataset class:** Inherit from torch.utils.data.Dataset. Scan all image, LiDAR bin, and label paths in the KITTI directory within init, and implement single-frame YOLO detection, frustum point-cloud extraction, and padding to 512 points within getitem.
@@ -137,6 +137,18 @@ KITTI 3D Tracklet Cleaner and Visualizer. This script processes KITTI dataset tr
 4. **Execute multi-epoch training:** Wrap with an outer loop for epoch in range(num_epochs):, sequentially calling optimizer.zero_grad(), loss.backward(), and optimizer.step() in the inner loop.
 
 5. **Save model weights:** Track the average loss of each epoch, and use torch.save(model.state_dict(), 'frustum_pointnet.pth') to save the weights to disk when achieving the best-performing (lowest loss) model.
+
+## eval_frustum_pointnet.py
+
+Computes quantitative evaluation metrics (Mean Smooth L1 Loss) across the validation dataset to objectively assess 3D bounding box regression accuracy instead of relying solely on visual checks.
+
+1. **Validation Dataset Loader (KittiValDataset):** Automatically scans image and point cloud directories, executes YOLO 2D detection, isolates object frustums, and aligns them with KITTI XML tracklet ground-truth poses.
+
+2. **GPU-Accelerated Inference:** Configures PyTorch to execute model inference and loss calculation seamlessly on available NVIDIA CUDA devices.
+
+3. **Performance Benchmarking:** Feeds batched tensors through SimpleFrustumPointNet using loaded weights (frustum_pointnet_30epoch.pth) to output a standardized quantitative error score.
+
+![eval_simple_pointnet](./reference/eval_simple_pointnet.png)
 
 ---------------------------
 

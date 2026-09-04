@@ -207,15 +207,20 @@ class KittiFrustumDataset(Dataset):
         return torch.zeros((512, 3), dtype=torch.float32), torch.zeros(7, dtype=torch.float32)
 
 if __name__ == "__main__":
+    # 1. Automatically select GPU if available
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"=> Using device: {device}")
+    
     data_path = "/home/user/LiDAR_Camera_Perception_ws/data/2011_09_26/2011_09_26_drive_0009_sync"
     dataset = KittiFrustumDataset(data_path, "/home/user/LiDAR_Camera_Perception_ws/yolo11n.pt")
     dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
     
-    model = SimpleFrustumPointNet()
+    # 2. Move model to GPU
+    model = SimpleFrustumPointNet().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     
     best_loss = float('inf')
-    num_epochs = 15
+    num_epochs = 30
     
     # Training Loop across multiple epochs
     for epoch in range(num_epochs):
@@ -223,6 +228,10 @@ if __name__ == "__main__":
         epoch_loss = 0.0
         
         for batch_points, batch_gt_boxes in dataloader:
+            # 3. Move batch data tensors to GPU
+            batch_points = batch_points.to(device)
+            batch_gt_boxes = batch_gt_boxes.to(device)
+            
             optimizer.zero_grad()                                   # Clear previous gradients
             predictions = model(batch_points)                       # Forward pass
             loss = F.smooth_l1_loss(predictions, batch_gt_boxes)    # Compute Smooth L1 Loss
