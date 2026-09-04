@@ -53,8 +53,9 @@ sudo apt update && sudo apt install -y libgles2 libgles2-mesa-dev
 ```
 script/
 ├── test_frustum_crop.py         # Main test script for projection, frustum extraction, and Open3D visualization
-├── frustum_pointnet_pipeline.py # Serves as a visualization tool for pipeline validation and single-frame inspection
-├── data_clean_KITTI.py          # KITTI 3D Tracklet Cleaner and Visualizer
+├── frustum_pointnet_pipeline.py # Validation tool for pipeline inspection and single-frame testing
+├── train_frustum_pointnet.py    # End-to-end training loop script with checkpoint saving
+├── data_clean_KITTI.py          # KITTI 3D Tracklet Cleaner and XML DOM Sanitizer
 └── README.md
 ```
 
@@ -123,6 +124,19 @@ KITTI 3D Tracklet Cleaner and Visualizer. This script processes KITTI dataset tr
 4. **XML Sanitization & Persistence:** Automatically targets and removes invalid inner pose entries (pose_item) directly from the XML Document Object Model (DOM) tree without breaking file structure, then saves the updated file as a cleaned dataset.
 
 5. **Synchronization & Visualization:** Projects valid 3D bounding box coordinates onto synchronized 2D camera image planes and renders complete 12-edge wireframes for qualitative pipeline inspection.
+
+
+## train_frustum_pointnet.py
+
+1. **Define PyTorch Dataset class:** Inherit from torch.utils.data.Dataset. Scan all image, LiDAR bin, and label paths in the KITTI directory within init, and implement single-frame YOLO detection, frustum point-cloud extraction, and padding to 512 points within getitem.
+
+2. **Create DataLoader:** Encapsulate data into an iterable batch data structure using torch.utils.data.DataLoader(dataset, batch_size=4, shuffle=True).
+
+3. **Implement training loop and optimizer:** Initialize model = SimpleFrustumPointNet() and optimizer = torch.optim.Adam(model.parameters(), lr=0.001).
+
+4. **Execute multi-epoch training:** Wrap with an outer loop for epoch in range(num_epochs):, sequentially calling optimizer.zero_grad(), loss.backward(), and optimizer.step() in the inner loop.
+
+5. **Save model weights:** Track the average loss of each epoch, and use torch.save(model.state_dict(), 'frustum_pointnet.pth') to save the weights to disk when achieving the best-performing (lowest loss) model.
 
 ---------------------------
 
