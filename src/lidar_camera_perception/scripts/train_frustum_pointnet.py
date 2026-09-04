@@ -17,6 +17,7 @@ import xml.etree.ElementTree as ET
 import torch.nn.functional as F
 from torch.utils.data import Dataset,DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 TARGET_CLASSES = {
     'person': 0,
@@ -151,7 +152,7 @@ class KittiFrustumDataset(Dataset):
         self.annotations = parse_kitti_tracklets(os.path.join(data_dir, "tracklet_labels.xml"))
         self.proj, self.ext = read_kitti_calib()
         
-        print("=> Initializing dataset and pre-generating YOLO 2D proposals...")
+        print("=> Initializing dataset with accurate 3D-to-2D projection matching...")
         self.yolo = YOLO(yolo_model_path)
         
         self.cached_data = []
@@ -162,7 +163,7 @@ class KittiFrustumDataset(Dataset):
             
             if not os.path.exists(bin_path):
                 continue
-            
+                
             img = cv2.imread(img_path)
             results = self.yolo(img, verbose=False)[0]
             boxes = results.boxes.xyxy.cpu().numpy()
@@ -179,50 +180,81 @@ class KittiFrustumDataset(Dataset):
             pts_2d_homo = (self.proj @ pts_homo[valid_mask].T).T
             u = pts_2d_homo[:, 0] / pts_2d_homo[:, 2]
             v = pts_2d_homo[:, 1] / pts_2d_homo[:, 2]
-                    
+            
             for box2d, cls_id in zip(boxes, clss):
                 if int(cls_id) in TARGET_CLASSES.values():
                     u1, v1, u2, v2 = box2d
                     in_box = (u >= u1) & (u <= u2) & (v >= v1) & (v <= v2)
                     frustum_pts = pts_3d[valid_mask][in_box]
                     
-                    if len(frustum_pts) < 5:
-                        sampled_pts = np.zeros((512, 3), dtype=np.float32)
-                        gt_box = np.zeros(7, dtype=np.float32)
-                    else:
-                        centroid = np.mean(frustum_pts, axis=0)
-                        norm_pts = frustum_pts - centroid
+                    if len(frustum_pts) <= 30:
+                        continue
                         
-                        if len(norm_pts) >= 512:
-                            choice = np.random.choice(len(norm_pts), 512, replace=False)
-                        else:
-                            choice = np.random.choice(len(norm_pts), 512, replace=True)
-                        sampled_pts = norm_pts[choice]
+                    # Find the true matching object for each YOLO box 
+                    # by projecting the 3D annotation back to 2D and measuring center distance.
+                    best_match_gt = None
+                    min_center_dist = float('inf')
+                    
+                    # Compute the 2D center point of the YOLO box
+                    yolo_center_u = (u1 + u2) / 2.0
+                    yolo_center_v = (v1 + v2) / 2.0
+                    
+                    for tracklet in self.annotations:
+                        pose_idx = frame_idx - tracklet['first_frame']
+                        if 0 <= pose_idx < len(tracklet['poses']):
+                            p = tracklet['poses'][pose_idx]
+                            
+                            # Project the 3D annotation center onto the 2D image plane
+                            gt_center_3d = np.array([p['tx'], p['ty'], p['tz'], 1.0])
+                            cam_pt = self.ext @ gt_center_3d
+                            if cam_pt[2] <= 0:
+                                continue
+                            proj_pt = self.proj @ cam_pt
+                            gt_u = proj_pt[0] / proj_pt[2]
+                            gt_v = proj_pt[1] / proj_pt[2]
+                            
+                            # Calculate the projected center distance and check if it falls within the YOLO box
+                            dist = np.sqrt((yolo_center_u - gt_u)**2 + (yolo_center_v - gt_v)**2)
+                            
+                            # If the GT projection falls inside the YOLO box bounds and is closer, update the best match
+                            if (u1 <= gt_u <= u2) and (v1 <= gt_v <= v2):
+                                if dist < min_center_dist:
+                                    min_center_dist = dist
+                                    best_match_gt = np.array([
+                                        p['tx'], p['ty'], p['tz'], 
+                                        tracklet['l'], tracklet['w'], tracklet['h'], 
+                                        p['rz']
+                                    ], dtype=np.float32)
+                                    
+                    if best_match_gt is not None:
+                        self.cached_data.append({
+                            'frustum_pts': frustum_pts,
+                            'gt_box': best_match_gt
+                        })
                         
-                        gt_box = np.zeros(7, dtype=np.float32)
-                        for tracklet in self.annotations:
-                            pose_idx = frame_idx - tracklet['first_frame']
-                            if 0 <= pose_idx < len(tracklet['poses']):
-                                p = tracklet['poses'][pose_idx]
-                                gt_box = np.array([p['tx'], p['ty'], p['tz'], tracklet['l'], tracklet['w'], tracklet['h'], p['rz']], dtype=np.float32)
-                                gt_box[:3] -= centroid  # Align with zero-centered frustum
-                                break
-                    
-                    # Convert to tensors immediately and store in RAM cache list
-                    self.cached_data.append((
-                        torch.tensor(sampled_pts, dtype=torch.float32),
-                        torch.tensor(gt_box, dtype=torch.float32)
-                    ))
-                    
-            print(f"=> Successfully pre-cached {len(self.cached_data)} samples into RAM.")
-            
+        print(f"=> Pre-caching complete with accurate matching. Total valid samples: {len(self.cached_data)}")
+
     def __len__(self):
         return len(self.cached_data)
 
     def __getitem__(self, idx):
-        # Returns pre-loaded tensors instantly without disk reads or CPU math bottlenecks
-        return self.cached_data[idx]
-    
+        sample = self.cached_data[idx]
+        frustum_pts = sample['frustum_pts']
+        gt_box = sample['gt_box'].copy()
+        
+        centroid = np.mean(frustum_pts, axis=0)
+        norm_pts = frustum_pts - centroid
+        
+        if len(norm_pts) >= 512:
+            choice = np.random.choice(len(norm_pts), 512, replace=False)
+        else:
+            choice = np.random.choice(len(norm_pts), 512, replace=True)
+        sampled_pts = norm_pts[choice]
+        
+        gt_box[:3] -= centroid
+        
+        return torch.tensor(sampled_pts, dtype=torch.float32), torch.tensor(gt_box, dtype=torch.float32)
+
 if __name__ == "__main__":
     # 1. Automatically select GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -230,7 +262,14 @@ if __name__ == "__main__":
     
     data_path = "/home/user/LiDAR_Camera_Perception_ws/data/2011_09_26/2011_09_26_drive_0009_sync"
     dataset = KittiFrustumDataset(data_path, "/home/user/LiDAR_Camera_Perception_ws/models/yolo11n.pt")
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=0, pin_memory=True)
+    
+    # Split dataset into train (80%) and validation (20%) sets
+    train_size = int(0.8 * len(dataset))
+    val_size = len(dataset) - train_size
+    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+    
+    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=0, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, num_workers=0, pin_memory=True)
     
     # 2. Move model to GPU
     model = SimpleFrustumPointNet().to(device)
@@ -245,14 +284,17 @@ if __name__ == "__main__":
     best_loss = float('inf')
     num_epochs = 30
     
+    # Configure Cosine Annealing Learning Rate Scheduler
+    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-5)
+    
     # Training Loop across multiple epochs
-    print(f"=> Starting training for {num_epochs} epochs across {len(dataloader)} training samples...")
+    print(f"=> Starting training for {num_epochs} epochs across {len(train_loader)} training samples...")
     for epoch in range(num_epochs):
         # train
         model.train()
         total_train_loss = 0.0
         
-        for batch_points, batch_gt_boxes in dataloader:
+        for batch_points, batch_gt_boxes in train_loader:
             # 3. Move batch data tensors to GPU
             batch_points = batch_points.to(device, non_blocking=True)
             batch_gt_boxes = batch_gt_boxes.to(device, non_blocking=True)
@@ -269,13 +311,44 @@ if __name__ == "__main__":
             scaler.update()
             total_train_loss += loss.item()
             
-        avg_loss = total_train_loss / len(dataloader)
-        print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}")
+        avg_train_loss = total_train_loss / len(train_loader)
+        
+        # Eval
+        model.eval()
+        total_val_loss = 0.0
+        with torch.no_grad():
+            for batch_points, batch_gt_boxes in val_loader:
+                batch_points = batch_points.to(device, non_blocking=True)
+                batch_gt_boxes = batch_gt_boxes.to(device, non_blocking=True)
+                
+                with torch.amp.autocast('cuda'):
+                    predictions = model(batch_points)
+                    val_loss = F.smooth_l1_loss(predictions, batch_gt_boxes)
+                    
+                total_val_loss += val_loss.item()
+                
+        avg_val_loss = total_val_loss / len(val_loader)
+        
+        # Step the learning rate scheduler
+        scheduler.step()
+        
+        print(f"Epoch [{epoch+1}/{num_epochs}] | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")        
         
         # Log training loss to TensorBoard
-        writer.add_scalar('Loss/Train', avg_loss, epoch)
+        writer.add_scalar('Loss/Train', avg_train_loss, epoch)
+        writer.add_scalar('Loss/Val', avg_val_loss, epoch)
+        writer.add_scalar('LearningRate', scheduler.get_last_lr()[0], epoch)
         
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            torch.save(model.state_dict(), 'frustum_pointnet.pth')
-            print("=> Saved best model weights to frustum_pointnet.pth")
+        if avg_val_loss < best_loss:
+            best_loss = avg_val_loss
+            # Save comprehensive checkpoint dictionary
+            checkpoint = {
+                'epoch': epoch + 1,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'scaler_state_dict': scaler.state_dict(),
+                'best_loss': best_loss
+            }
+            torch.save(checkpoint, 'frustum_pointnet_checkpoint.pth')
+            print("=> Saved best training checkpoint.")

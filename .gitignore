@@ -13,6 +13,7 @@ runs/
 # training data and models
 data/
 models/
+devkit/
 
 # ros2 bag file
 kitti_dataset_0009/
