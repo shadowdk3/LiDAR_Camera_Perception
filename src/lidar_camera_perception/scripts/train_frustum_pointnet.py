@@ -92,7 +92,7 @@ def read_kitti_calib():
     ])
 
     velo_to_cam2_projection = cam2_projection_rectified @ cam0_rectification @ velo_to_cam0_extrinsic
-    return velo_to_cam2_projection, velo_to_cam0_extrinsic
+    return velo_to_cam2_projection, velo_to_cam0_extrinsic, cam0_rectification, cam2_projection_rectified
 
 def parse_kitti_tracklets(xml_path):
     tree = ET.parse(xml_path)
@@ -134,6 +134,39 @@ def parse_kitti_tracklets(xml_path):
         tracklets.append(tracklet)
     return tracklets
 
+def visualize_sample(bin_path, img_path, gt_box, pred_box=None):
+    # 1. Load the image and raw LiDAR point cloud data
+    img = cv2.imread(img_path)
+    point_cloud = np.fromfile(bin_path, dtype=np.float32).reshape(-1, 4)
+    pts_3d = point_cloud[:, :3]
+    
+    # 2. Create and populate an Open3D PointCloud object
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(pts_3d)
+    
+    # 3. Helper function to create an Open3D OrientedBoundingBox (OBB) from 7D box parameters
+    # box_params format: [x, y, z, l, w, h, rz]
+    def create_o3d_box(box_params, color):
+        x, y, z, l, w, h, rz = box_params
+        print("verify:", [x, y, z, l, w, h, rz])
+        # Create a rotation matrix around the Z-axis using the yaw angle (rz)
+        rot = o3d.geometry.OrientedBoundingBox.get_rotation_matrix_from_xyz((0, 0, rz))
+        obb = o3d.geometry.OrientedBoundingBox(np.array([x, y, z]), rot, np.array([l, w, h]))
+        obb.color = color
+        return obb
+        
+    geometries = [pcd]
+    gt_obb = create_o3d_box(gt_box, color=[0, 1, 0]) # Green represents Ground Truth
+    geometries.append(gt_obb)
+    
+    if pred_box is not None:
+        pred_obb = create_o3d_box(pred_box, color=[1, 0, 0]) # Red represents Prediction
+        geometries.append(pred_obb)
+        
+    # 4. Open an interactive 3D visualization window (supports mouse rotation, translation, and zoom)
+    print("=> Displaying 3D point cloud and bounding boxes (use mouse to rotate, zoom, and pan)")
+    o3d.visualization.draw_geometries(geometries)
+    
 """
 RAM Caching & Data Pipeline Optimization
 
@@ -149,9 +182,17 @@ class KittiFrustumDataset(Dataset):
         self.img_dir = os.path.join(data_dir, "image_00/data")
         self.bin_dir = os.path.join(data_dir, "velodyne_points/data")
         self.img_files = sorted(os.listdir(self.img_dir))
-        self.annotations = parse_kitti_tracklets(os.path.join(data_dir, "tracklet_labels.xml"))
-        self.proj, self.ext = read_kitti_calib()
-        
+        self.annotations = parse_kitti_tracklets(os.path.join(data_dir, "tracklet_labels_cleaned.xml"))
+        self.proj, self.ext, cam0_rectification, cam2_projection_rectified = read_kitti_calib()
+
+        # Construct a composite matrix to project from unrectified Camera 0 coordinates to Camera 2 (RGB image) pixels.
+        # 1. cam0_rectification (R0_rect): Rectifies the raw Camera 0 coordinate system 
+        #    to align with the standard rectified coordinate system used by KITTI 3D annotations.
+        # 2. cam2_projection_rectified (P2): Projects the rectified 3D coordinates onto the 2D pixel plane of Camera 2 (RGB camera).
+        # Note: Even though KITTI 3D space is referenced to Cam0, visual tasks and YOLO models 
+        #       typically use image_02 (Cam2 RGB images). This combined matrix ensures correct alignment and projection.
+        cam0_to_cam2_projection = cam2_projection_rectified @ cam0_rectification
+
         print("=> Initializing dataset with accurate 3D-to-2D projection matching...")
         self.yolo = YOLO(yolo_model_path)
         
@@ -181,25 +222,38 @@ class KittiFrustumDataset(Dataset):
             u = pts_2d_homo[:, 0] / pts_2d_homo[:, 2]
             v = pts_2d_homo[:, 1] / pts_2d_homo[:, 2]
             
+            # print for dubug
+            # print("image:", img_path)
+            # print("box:", boxes)
+            # print("clss:", clss)
+            
             for box2d, cls_id in zip(boxes, clss):
                 if int(cls_id) in TARGET_CLASSES.values():
                     u1, v1, u2, v2 = box2d
-                    in_box = (u >= u1) & (u <= u2) & (v >= v1) & (v <= v2)
-                    frustum_pts = pts_3d[valid_mask][in_box]
                     
-                    if len(frustum_pts) <= 30:
+                    valid_indices = np.where(valid_mask)[0]
+                    box_mask = (u >= u1) & (u <= u2) & (v >= v1) & (v <= v2)
+                    frustum_indices = valid_indices[box_mask]
+                    frustum_pts = pts_3d[frustum_indices]
+                    
+                    if len(frustum_pts) <= 5:
                         continue
                         
-                    # Find the true matching object for each YOLO box 
-                    # by projecting the 3D annotation back to 2D and measuring center distance.
-                    best_match_gt = None
-                    min_center_dist = float('inf')
-                    
                     # Compute the 2D center point of the YOLO box
                     yolo_center_u = (u1 + u2) / 2.0
                     yolo_center_v = (v1 + v2) / 2.0
                     
+                    # Find the true matching object for each YOLO box 
+                    # by projecting the 3D annotation back to 2D and measuring center distance.
+                    best_p = None
+                    best_tracklet = None
+                    min_center_dist = float('inf')
+
                     for tracklet in self.annotations:
+                        
+                        if len(tracklet['poses']) == 0:
+                            continue
+                        
                         pose_idx = frame_idx - tracklet['first_frame']
                         if 0 <= pose_idx < len(tracklet['poses']):
                             p = tracklet['poses'][pose_idx]
@@ -209,25 +263,48 @@ class KittiFrustumDataset(Dataset):
                             cam_pt = self.ext @ gt_center_3d
                             if cam_pt[2] <= 0:
                                 continue
-                            proj_pt = self.proj @ cam_pt
+                            
+                            # Project the 3D point from the Camera 0 coordinate frame onto the Camera 2 (RGB image) 2D pixel plane
+                            proj_pt = cam0_to_cam2_projection @ cam_pt
+                            
+                            if proj_pt[2] <= 1e-5:
+                                continue
+        
                             gt_u = proj_pt[0] / proj_pt[2]
                             gt_v = proj_pt[1] / proj_pt[2]
                             
+                            # print for debug
+                            # print(f"GT 3D Center Projected -> u: {gt_u:.1f}, v: {gt_v:.1f}")
+                            # print(f"YOLO Box -> u1:{u1}, v1:{v1}, u2:{u2}, v2:{v2}")
+
                             # Calculate the projected center distance and check if it falls within the YOLO box
                             dist = np.sqrt((yolo_center_u - gt_u)**2 + (yolo_center_v - gt_v)**2)
-                            
+                                    
                             # If the GT projection falls inside the YOLO box bounds and is closer, update the best match
+                            # Keep track of the closest matching tracklet inside the YOLO box
                             if (u1 <= gt_u <= u2) and (v1 <= gt_v <= v2):
                                 if dist < min_center_dist:
                                     min_center_dist = dist
-                                    best_match_gt = np.array([
-                                        p['tx'], p['ty'], p['tz'], 
-                                        tracklet['l'], tracklet['w'], tracklet['h'], 
-                                        p['rz']
-                                    ], dtype=np.float32)
+                                    best_p = p
+                                    best_tracklet = tracklet
                                     
-                    if best_match_gt is not None:
+                    if best_p is not None:
+                        # losse bounding box that includes a lot of empty space degrades traning performance, 
+                        # so need to shift up the bounding box
+                        adjusted_tz = best_p['tz'] + 0.8
+                        
+                        # Build and save the final 3D box only after checking all tracklets to prevent loop overwriting
+                        best_match_gt = np.array([
+                            best_p['tx'], best_p['ty'], adjusted_tz, 
+                            best_tracklet['l'], best_tracklet['w'], best_tracklet['h'], 
+                            best_p['rz']
+                        ], dtype=np.float32)
+                        
+                        # print("best_match:", best_match_gt)
+                        
                         self.cached_data.append({
+                            'img_path': img_path,
+                            'bin_path': bin_path,
                             'frustum_pts': frustum_pts,
                             'gt_box': best_match_gt
                         })
@@ -256,6 +333,8 @@ class KittiFrustumDataset(Dataset):
         return torch.tensor(sampled_pts, dtype=torch.float32), torch.tensor(gt_box, dtype=torch.float32)
 
 if __name__ == "__main__":
+    VISUALIZE_DATASET = False
+    
     # 1. Automatically select GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"=> Using device: {device}")
@@ -263,6 +342,26 @@ if __name__ == "__main__":
     data_path = "/home/user/LiDAR_Camera_Perception_ws/data/2011_09_26/2011_09_26_drive_0009_sync"
     dataset = KittiFrustumDataset(data_path, "/home/user/LiDAR_Camera_Perception_ws/models/yolo11n.pt")
     
+    if VISUALIZE_DATASET:
+        print(f"=> Starting dataset visualization validation. Total samples: {len(dataset)}")
+
+        for idx in range(len(dataset)):
+            # Retrieve tensor data
+            sampled_pts, gt_box = dataset[idx]
+            
+            # Retrieve original paths and data from cache for visualization
+            raw_sample = dataset.cached_data[idx]
+            
+            print(f"Viewing sample {idx + 1} / {len(dataset)}...")
+            
+            # Call the Open3D visualization function
+            # visualize_sample reads raw_sample['bin_path'] and raw_sample['img_path'], then draws the 3D bounding box using gt_box
+            visualize_sample(
+                bin_path=raw_sample['bin_path'], 
+                img_path=raw_sample['img_path'], 
+                gt_box=raw_sample['gt_box'] # Recommended to use either the raw gt_box or the centroid-aligned gt_box for inspection
+            )
+            
     # Split dataset into train (80%) and validation (20%) sets
     train_size = int(0.8 * len(dataset))
     val_size = len(dataset) - train_size
@@ -282,7 +381,7 @@ if __name__ == "__main__":
     scaler = torch.amp.GradScaler('cuda')
 
     best_loss = float('inf')
-    num_epochs = 30
+    num_epochs = 100
     
     # Configure Cosine Annealing Learning Rate Scheduler
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-5)
