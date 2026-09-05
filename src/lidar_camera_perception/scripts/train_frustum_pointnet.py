@@ -289,13 +289,10 @@ class KittiFrustumDataset(Dataset):
                                     best_tracklet = tracklet
                                     
                     if best_p is not None:
-                        # losse bounding box that includes a lot of empty space degrades traning performance, 
-                        # so need to shift up the bounding box
-                        adjusted_tz = best_p['tz'] + 0.8
                         
                         # Build and save the final 3D box only after checking all tracklets to prevent loop overwriting
                         best_match_gt = np.array([
-                            best_p['tx'], best_p['ty'], adjusted_tz, 
+                            best_p['tx'], best_p['ty'], best_p['tz'], 
                             best_tracklet['l'], best_tracklet['w'], best_tracklet['h'], 
                             best_p['rz']
                         ], dtype=np.float32)
@@ -333,7 +330,7 @@ class KittiFrustumDataset(Dataset):
         return torch.tensor(sampled_pts, dtype=torch.float32), torch.tensor(gt_box, dtype=torch.float32)
 
 if __name__ == "__main__":
-    VISUALIZE_DATASET = False
+    VISUALIZE_DATASET = True
     
     # 1. Automatically select GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

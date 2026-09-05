@@ -1,6 +1,11 @@
 # Frustum-to-Voxel 3D Object Detection for Autonomous Systems
 -------------------------------------
 
+![eval_simple_pointnet](../../../reference/training_log.png)
+![eval_simple_pointnet](../../../reference/train_result_1.png)
+![eval_simple_pointnet](../../../reference/train_result_2.png)
+
+
 ## Install CUDA
 
 ```
