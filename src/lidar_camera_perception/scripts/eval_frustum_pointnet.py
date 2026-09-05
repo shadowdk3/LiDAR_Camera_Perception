@@ -7,6 +7,7 @@ from ultralytics import YOLO
 import xml.etree.ElementTree as ET
 from torch.utils.tensorboard import SummaryWriter
 import torch.nn.functional as F
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 TARGET_CLASSES = {
     'person': 0,
@@ -134,10 +135,21 @@ if __name__ == "__main__":
     annotations = parse_kitti_tracklets(label_path)
     proj, ext = read_kitti_calib()
     
+    num_epochs = 30  # Define your total epoch count here
+    
     # Load trained model weights
     model = SimpleFrustumPointNet().to(device)
-    model.load_state_dict(torch.load('frustum_pointnet.pth'))
-    # model.load_state_dict(torch.load('frustum_pointnet_30epoch.pth'))
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-5)
+    scaler = torch.amp.GradScaler('cuda')
+    
+    checkpoint = torch.load('frustum_pointnet_checkpoint.pth')
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    scaler.load_state_dict(checkpoint['scaler_state_dict'])
+    start_epoch = checkpoint['epoch']
+    best_loss = checkpoint['best_loss']
     model.eval()
     
     # Initialize TensorBoard writer for evaluation/inference logging
@@ -170,7 +182,7 @@ if __name__ == "__main__":
                 in_box = (u >= u1) & (u <= u2) & (v >= v1) & (v <= v2)
                 frustum_pts = pts_3d[valid_mask][in_box]
                 
-                if len(frustum_pts) > 5:
+                if len(frustum_pts) > 30:
                     centroid = np.mean(frustum_pts, axis=0)
                     norm_pts = frustum_pts - centroid
                     
@@ -184,6 +196,7 @@ if __name__ == "__main__":
                     pred_box = model(tensor_input).squeeze(0).cpu().numpy() # (7,)
                     
                     # Transform predicted relative box back to global/camera coordinate frame by adding centroid
+                    pred_box_global = pred_box.copy()
                     pred_box[:3] += centroid
                     
                     # Draw Prediction in Red (B, G, R) -> (0, 0, 255)
