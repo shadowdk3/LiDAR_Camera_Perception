@@ -66,6 +66,59 @@ class SimpleFrustumPointNet(nn.Module):
         # 3D Bounding Box Parameters Regression
         box_params = self.fc(x) # (B, 7)
         return box_params
+
+"""
+自定義 3D Corner Loss（三維角落損失）的核心概念，是將模型預測的 7D 框參數（中心點 $x, y, z$、長寬高 $l, w, h$、旋轉角 $rz$）在數學上轉換為 3D 空間中的 8個角點（Corners），並直接計算預測角點與真實角點（Ground 相比於分開計算中心點和長寬高的 Smooth L1 Loss，Corner Loss 能更直接地反映物體整體的空間幾何誤差。
+
+3D Corner Loss 的實作步驟
+生成標準角點範本：以物件中心為原點，根據尺寸 $(l, w, h)$ 建立未旋轉前的 8 個頂點座標。
+施加旋轉與平移：透過預轉角度 $rz$ 建立繞 Z 軸的旋轉矩陣，將 8 個角點旋轉到對應方向，再平移至預測的中心點 $(x, y, z)$。
+計算角點距離損失：對預測的 8 個角點與真實框的 8 個角點計算 L1 或 Smooth L1 距離。
+"""  
+class Custom3DCornerLoss(nn.Module):
+    def __init__(self):
+        super(Custom3DCornerLoss, self).__init__()
+        self.smooth_l1 = nn.SmoothL1Loss()
+
+    def get_box_corners(self, box_params):
+        # box_params: [B, 7] -> x, y, z, l, w, h, rz
+        x, y, z = box_params[:, 0], box_params[:, 1], box_params[:, 2]
+        l, w, h = box_params[:, 3], box_params[:, 4], box_params[:, 5]
+        rz = box_params[:, 6]
+
+        batch_size = box_params.shape[0]
+        device = box_params.device
+
+        # 1. 建立標準 8 個角點 (未旋轉)
+        x_corners = torch.stack([l/2, l/2, -l/2, -l/2, l/2, l/2, -l/2, -l/2], dim=1)
+        y_corners = torch.stack([w/2, -w/2, -w/2, w/2, w/2, -w/2, -w/2, w/2], dim=1)
+        z_corners = torch.stack([h/2, h/2, h/2, h/2, -h/2, -h/2, -h/2, -h/2], dim=1)
+        corners = torch.stack([x_corners, y_corners, z_corners], dim=2) # [B, 8, 3]
+
+        # 2. 建立 Z 軸旋轉矩陣
+        c, s = torch.cos(rz), torch.sin(rz)
+        zeros = torch.zeros_like(c)
+        ones = torch.ones_like(c)
+        
+        rot_matrix = torch.stack([
+            c, -s, zeros,
+            s,  c, zeros,
+            zeros, zeros, ones
+        ], dim=1).reshape(batch_size, 3, 3)
+
+        # 3. 旋轉並平移至絕對座標
+        rotated_corners = torch.matmul(corners, rot_matrix.transpose(1, 2))
+        center = torch.stack([x, y, z], dim=1).unsqueeze(1) # [B, 1, 3]
+        abs_corners = rotated_corners + center
+
+        return abs_corners
+
+    def forward(self, pred_boxes, gt_boxes):
+        pred_corners = self.get_box_corners(pred_boxes)
+        gt_corners = self.get_box_corners(gt_boxes)
+        # 計算 8 個角點的 L1 損失平均值
+        loss = torch.mean(torch.abs(pred_corners - gt_corners))
+        return loss
     
 def read_kitti_calib():
     # 1. Extrinsic Matrix from LiDAR to Cam0 (4x4)
@@ -330,7 +383,7 @@ class KittiFrustumDataset(Dataset):
         return torch.tensor(sampled_pts, dtype=torch.float32), torch.tensor(gt_box, dtype=torch.float32)
 
 if __name__ == "__main__":
-    VISUALIZE_DATASET = True
+    VISUALIZE_DATASET = False
     
     # 1. Automatically select GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -338,6 +391,7 @@ if __name__ == "__main__":
     
     data_path = "/home/user/LiDAR_Camera_Perception_ws/data/2011_09_26/2011_09_26_drive_0009_sync"
     dataset = KittiFrustumDataset(data_path, "/home/user/LiDAR_Camera_Perception_ws/models/yolo11n.pt")
+    log_path = "runs/frustum_pointnet_experiment_3d_corner_loss"
     
     if VISUALIZE_DATASET:
         print(f"=> Starting dataset visualization validation. Total samples: {len(dataset)}")
@@ -368,11 +422,11 @@ if __name__ == "__main__":
     val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, num_workers=0, pin_memory=True)
     
     # 2. Move model to GPU
-    model = SimpleFrustumPointNet().to(device)
+    model = frustum_utils.SimpleFrustumPointNet().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     
     # Initialize TensorBoard writer
-    writer = SummaryWriter(log_dir='runs/frustum_pointnet_experiment')
+    writer = SummaryWriter(log_dir=log_path)
     
     # Enable Automatic Mixed Precision (AMP) for faster FP16 training and lower memory overhead
     scaler = torch.amp.GradScaler('cuda')
@@ -383,6 +437,8 @@ if __name__ == "__main__":
     # Configure Cosine Annealing Learning Rate Scheduler
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-5)
     
+    corner_loss_fn = Custom3DCornerLoss().to(device)
+
     # Training Loop across multiple epochs
     print(f"=> Starting training for {num_epochs} epochs across {len(train_loader)} training samples...")
     for epoch in range(num_epochs):
@@ -398,9 +454,14 @@ if __name__ == "__main__":
             optimizer.zero_grad()                                   # Clear previous gradients
             # Mixed precision forward pass
             with torch.amp.autocast('cuda'):
-                predictions = model(batch_points)                       # Forward pass
-                loss = F.smooth_l1_loss(predictions, batch_gt_boxes)    # Compute Smooth L1 Loss
+                predictions = model(batch_points)
+                
+                # Compute the custom 3D corner loss
+                loss = corner_loss_fn(predictions, batch_gt_boxes)   
             
+                # Assign to 'loss' so backward() can find it (add weights if combining with other losses)
+                # loss = loss_corner  # e.g., loss = base_box_loss + (0.2 * loss_corner)
+
             # Scaled backward pass
             scaler.scale(loss).backward()                          # Backward pass (compute gradients)
             scaler.step(optimizer)                                 # Update model weights
@@ -419,7 +480,8 @@ if __name__ == "__main__":
                 
                 with torch.amp.autocast('cuda'):
                     predictions = model(batch_points)
-                    val_loss = F.smooth_l1_loss(predictions, batch_gt_boxes)
+                    # val_loss = F.smooth_l1_loss(predictions, batch_gt_boxes)
+                    val_loss = corner_loss_fn(predictions, batch_gt_boxes)    
                     
                 total_val_loss += val_loss.item()
                 

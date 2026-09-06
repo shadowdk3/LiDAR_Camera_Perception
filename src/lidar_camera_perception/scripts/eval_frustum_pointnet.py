@@ -20,6 +20,59 @@ TARGET_CLASSES = {
     'stop_sign': 11
 }
 
+"""
+自定義 3D Corner Loss（三維角落損失）的核心概念，是將模型預測的 7D 框參數（中心點 $x, y, z$、長寬高 $l, w, h$、旋轉角 $rz$）在數學上轉換為 3D 空間中的 8個角點（Corners），並直接計算預測角點與真實角點（Ground 相比於分開計算中心點和長寬高的 Smooth L1 Loss，Corner Loss 能更直接地反映物體整體的空間幾何誤差。
+
+3D Corner Loss 的實作步驟
+生成標準角點範本：以物件中心為原點，根據尺寸 $(l, w, h)$ 建立未旋轉前的 8 個頂點座標。
+施加旋轉與平移：透過預轉角度 $rz$ 建立繞 Z 軸的旋轉矩陣，將 8 個角點旋轉到對應方向，再平移至預測的中心點 $(x, y, z)$。
+計算角點距離損失：對預測的 8 個角點與真實框的 8 個角點計算 L1 或 Smooth L1 距離。
+"""  
+class Custom3DCornerLoss(nn.Module):
+    def __init__(self):
+        super(Custom3DCornerLoss, self).__init__()
+        self.smooth_l1 = nn.SmoothL1Loss()
+
+    def get_box_corners(self, box_params):
+        # box_params: [B, 7] -> x, y, z, l, w, h, rz
+        x, y, z = box_params[:, 0], box_params[:, 1], box_params[:, 2]
+        l, w, h = box_params[:, 3], box_params[:, 4], box_params[:, 5]
+        rz = box_params[:, 6]
+
+        batch_size = box_params.shape[0]
+        device = box_params.device
+
+        # 1. 建立標準 8 個角點 (未旋轉)
+        x_corners = torch.stack([l/2, l/2, -l/2, -l/2, l/2, l/2, -l/2, -l/2], dim=1)
+        y_corners = torch.stack([w/2, -w/2, -w/2, w/2, w/2, -w/2, -w/2, w/2], dim=1)
+        z_corners = torch.stack([h/2, h/2, h/2, h/2, -h/2, -h/2, -h/2, -h/2], dim=1)
+        corners = torch.stack([x_corners, y_corners, z_corners], dim=2) # [B, 8, 3]
+
+        # 2. 建立 Z 軸旋轉矩陣
+        c, s = torch.cos(rz), torch.sin(rz)
+        zeros = torch.zeros_like(c)
+        ones = torch.ones_like(c)
+        
+        rot_matrix = torch.stack([
+            c, -s, zeros,
+            s,  c, zeros,
+            zeros, zeros, ones
+        ], dim=1).reshape(batch_size, 3, 3)
+
+        # 3. 旋轉並平移至絕對座標
+        rotated_corners = torch.matmul(corners, rot_matrix.transpose(1, 2))
+        center = torch.stack([x, y, z], dim=1).unsqueeze(1) # [B, 1, 3]
+        abs_corners = rotated_corners + center
+
+        return abs_corners
+
+    def forward(self, pred_boxes, gt_boxes):
+        pred_corners = self.get_box_corners(pred_boxes)
+        gt_corners = self.get_box_corners(gt_boxes)
+        # 計算 8 個角點的 L1 損失平均值
+        loss = torch.mean(torch.abs(pred_corners - gt_corners))
+        return loss
+    
 class SimpleFrustumPointNet(nn.Module):
     def __init__(self):
         super(SimpleFrustumPointNet, self).__init__()
@@ -126,23 +179,25 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     data_dir = "/home/user/LiDAR_Camera_Perception_ws/data/2011_09_26/2011_09_26_drive_0009_sync"
-    img_path = os.path.join(data_dir, "image_00/data/0000000072.png")
-    bin_path = os.path.join(data_dir, "velodyne_points/data/0000000072.bin")
+    img_path = os.path.join(data_dir, "image_00/data/0000000400.png")
+    bin_path = os.path.join(data_dir, "velodyne_points/data/0000000400.bin")
     label_path = os.path.join(data_dir, "tracklet_labels.xml")
+    log_path = 'runs/frustum_pointnet_eval_3d_corner_loss'
     
     img = cv2.imread(img_path)
     point_cloud = np.fromfile(bin_path, dtype=np.float32).reshape(-1, 4)
     annotations = parse_kitti_tracklets(label_path)
     proj, ext = read_kitti_calib()
     
-    num_epochs = 30  # Define your total epoch count here
+    num_epochs = 100  # Define your total epoch count here
     
     # Load trained model weights
     model = SimpleFrustumPointNet().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-5)
     scaler = torch.amp.GradScaler('cuda')
-    
+    corner_loss_fn = Custom3DCornerLoss().to(device)
+        
     checkpoint = torch.load('frustum_pointnet_checkpoint.pth')
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -153,7 +208,7 @@ if __name__ == "__main__":
     model.eval()
     
     # Initialize TensorBoard writer for evaluation/inference logging
-    writer = SummaryWriter(log_dir='runs/frustum_pointnet_eval')
+    writer = SummaryWriter(log_dir=log_path)
     
     yolo = YOLO("/home/user/LiDAR_Camera_Perception_ws/models/yolo11n.pt")
     results = yolo(img, verbose=False)[0]
@@ -212,7 +267,7 @@ if __name__ == "__main__":
                             
                             pred_tensor = torch.tensor(pred_box, dtype=torch.float32).unsqueeze(0)
                             gt_tensor = torch.tensor(gt_box, dtype=torch.float32).unsqueeze(0)
-                            loss = F.smooth_l1_loss(pred_tensor, gt_tensor).item()
+                            loss = corner_loss_fn(pred_tensor, gt_tensor).item()
                             
                             total_eval_loss += loss
                             valid_detections_count += 1
