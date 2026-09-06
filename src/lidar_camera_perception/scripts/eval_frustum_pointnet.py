@@ -2,178 +2,12 @@ import os
 import numpy as np
 import cv2
 import torch
-import torch.nn as nn
 from ultralytics import YOLO
-import xml.etree.ElementTree as ET
 from torch.utils.tensorboard import SummaryWriter
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-TARGET_CLASSES = {
-    'person': 0,
-    'bicycle': 1,
-    'car': 2,
-    'motorcycle': 3,
-    'bus': 5,
-    'truck': 7,
-    'traffic_light': 9,
-    'stop_sign': 11
-}
-
-"""
-自定義 3D Corner Loss（三維角落損失）的核心概念，是將模型預測的 7D 框參數（中心點 $x, y, z$、長寬高 $l, w, h$、旋轉角 $rz$）在數學上轉換為 3D 空間中的 8個角點（Corners），並直接計算預測角點與真實角點（Ground 相比於分開計算中心點和長寬高的 Smooth L1 Loss，Corner Loss 能更直接地反映物體整體的空間幾何誤差。
-
-3D Corner Loss 的實作步驟
-生成標準角點範本：以物件中心為原點，根據尺寸 $(l, w, h)$ 建立未旋轉前的 8 個頂點座標。
-施加旋轉與平移：透過預轉角度 $rz$ 建立繞 Z 軸的旋轉矩陣，將 8 個角點旋轉到對應方向，再平移至預測的中心點 $(x, y, z)$。
-計算角點距離損失：對預測的 8 個角點與真實框的 8 個角點計算 L1 或 Smooth L1 距離。
-"""  
-class Custom3DCornerLoss(nn.Module):
-    def __init__(self):
-        super(Custom3DCornerLoss, self).__init__()
-        self.smooth_l1 = nn.SmoothL1Loss()
-
-    def get_box_corners(self, box_params):
-        # box_params: [B, 7] -> x, y, z, l, w, h, rz
-        x, y, z = box_params[:, 0], box_params[:, 1], box_params[:, 2]
-        l, w, h = box_params[:, 3], box_params[:, 4], box_params[:, 5]
-        rz = box_params[:, 6]
-
-        batch_size = box_params.shape[0]
-        device = box_params.device
-
-        # 1. 建立標準 8 個角點 (未旋轉)
-        x_corners = torch.stack([l/2, l/2, -l/2, -l/2, l/2, l/2, -l/2, -l/2], dim=1)
-        y_corners = torch.stack([w/2, -w/2, -w/2, w/2, w/2, -w/2, -w/2, w/2], dim=1)
-        z_corners = torch.stack([h/2, h/2, h/2, h/2, -h/2, -h/2, -h/2, -h/2], dim=1)
-        corners = torch.stack([x_corners, y_corners, z_corners], dim=2) # [B, 8, 3]
-
-        # 2. 建立 Z 軸旋轉矩陣
-        c, s = torch.cos(rz), torch.sin(rz)
-        zeros = torch.zeros_like(c)
-        ones = torch.ones_like(c)
-        
-        rot_matrix = torch.stack([
-            c, -s, zeros,
-            s,  c, zeros,
-            zeros, zeros, ones
-        ], dim=1).reshape(batch_size, 3, 3)
-
-        # 3. 旋轉並平移至絕對座標
-        rotated_corners = torch.matmul(corners, rot_matrix.transpose(1, 2))
-        center = torch.stack([x, y, z], dim=1).unsqueeze(1) # [B, 1, 3]
-        abs_corners = rotated_corners + center
-
-        return abs_corners
-
-    def forward(self, pred_boxes, gt_boxes):
-        pred_corners = self.get_box_corners(pred_boxes)
-        gt_corners = self.get_box_corners(gt_boxes)
-        # 計算 8 個角點的 L1 損失平均值
-        loss = torch.mean(torch.abs(pred_corners - gt_corners))
-        return loss
-    
-class SimpleFrustumPointNet(nn.Module):
-    def __init__(self):
-        super(SimpleFrustumPointNet, self).__init__()
-        self.mlp1 = nn.Sequential(
-            nn.Conv1d(3, 64, 1), nn.BatchNorm1d(64), nn.ReLU(),
-            nn.Conv1d(64, 128, 1), nn.BatchNorm1d(128), nn.ReLU(),
-            nn.Conv1d(128, 1024, 1), nn.BatchNorm1d(1024), nn.ReLU()
-        )
-        self.fc = nn.Sequential(
-            nn.Linear(1024, 512), nn.ReLU(),
-            nn.Linear(512, 256), nn.ReLU(),
-            nn.Linear(256, 7)
-        )
-
-    def forward(self, points):
-        x = points.permute(0, 2, 1)
-        x = self.mlp1(x)
-        x = torch.max(x, dim=2)[0]
-        return self.fc(x)
-
-def read_kitti_calib():
-    velo_to_cam0_extrinsic = np.array([
-        [7.533745e-03, -9.999714e-01, -6.166020e-04, -4.069766e-03],
-        [1.480249e-02, 7.280733e-04, -9.998902e-01, -7.631618e-02],
-        [9.998621e-01, 7.523790e-03, 1.480755e-02, -2.717806e-01],
-        [0.000000e+00, 0.000000e+00, 0.000000e+00, 1.000000e+00]
-    ])
-    cam0_rectification = np.array([
-        [9.999239e-01, 9.837760e-03, -7.445048e-03, 0.000000e+00],
-        [-9.869795e-03, 9.999421e-01, -4.278459e-03, 0.000000e+00],
-        [7.402527e-03, 4.351614e-03, 9.999631e-01, 0.000000e+00],
-        [0.000000e+00, 0.000000e+00, 0.000000e+00, 1.000000e+00]
-    ])
-    cam2_projection_rectified = np.array([
-        [7.215377e+02, 0.000000e+00, 6.095593e+02, 4.485728e+01],
-        [0.000000e+00, 7.215377e+02, 1.728540e+02, 2.163791e-01],
-        [0.000000e+00, 0.000000e+00, 1.000000e+00, 2.745884e-03]
-    ])
-    return cam2_projection_rectified @ cam0_rectification @ velo_to_cam0_extrinsic, velo_to_cam0_extrinsic
-
-def parse_kitti_tracklets(xml_path):
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
-    tracklets = []
-    for item in root.findall('.//item'):
-        obj_type = item.find('objectType').text if item.find('objectType') is not None else 'Unknown'
-        tracklet = {
-            'objectType': obj_type,
-            'h': float(item.find('h').text) if item.find('h') is not None else 0.0,
-            'w': float(item.find('w').text) if item.find('w') is not None else 0.0,
-            'l': float(item.find('l').text) if item.find('l') is not None else 0.0,
-            'first_frame': int(item.find('first_frame').text) if item.find('first_frame') is not None else 0,
-            'poses': []
-        }
-        poses_node = item.find('poses')
-        if poses_node is not None:
-            for pose_item in poses_node.findall('item'):
-                tracklet['poses'].append({
-                    'tx': float(pose_item.find('tx').text),
-                    'ty': float(pose_item.find('ty').text),
-                    'tz': float(pose_item.find('tz').text),
-                    'rz': float(pose_item.find('rz').text)
-                })
-        tracklets.append(tracklet)
-    return tracklets
-
-def draw_3d_box(img, box_params, proj_matrix, color):
-    # Unpack 7 parameters: [x, y, z, l, w, h, yaw]
-    x, y, z, l, w, h, rz = box_params
-    
-    # Create 3D bounding box corners centered at origin
-    x_corners = [l/2, l/2, -l/2, -l/2, l/2, l/2, -l/2, -l/2]
-    y_corners = [w/2, -w/2, -w/2, w/2, w/2, -w/2, -w/2, w/2]
-    z_corners = [0, 0, 0, 0, h, h, h, h]
-    corners = np.vstack([x_corners, y_corners, z_corners])
-    
-    # Apply yaw rotation and translation
-    c, s = np.cos(rz), np.sin(rz)
-    R = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
-    corners = R @ corners
-    corners[0, :] += x
-    corners[1, :] += y
-    corners[2, :] += z
-    
-    # Project onto 2D image plane
-    ones = np.ones((1, corners.shape[1]))
-    corners_homo = np.vstack((corners, ones))
-    img_coords = proj_matrix @ corners_homo
-    
-    if np.any(img_coords[2, :] <= 0):
-        return img # Skip boxes behind camera
-        
-    px = img_coords[0, :] / img_coords[2, :]
-    py = img_coords[1, :] / img_coords[2, :]
-    pts_2d = np.vstack((px, py)).T.astype(int)
-    
-    # Draw 12 edges of the bounding box
-    lines = [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]]
-    for start, end in lines:
-        cv2.line(img, tuple(pts_2d[start]), tuple(pts_2d[end]), color, 2)
-    return img
+import frustum_utils
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -186,17 +20,17 @@ if __name__ == "__main__":
     
     img = cv2.imread(img_path)
     point_cloud = np.fromfile(bin_path, dtype=np.float32).reshape(-1, 4)
-    annotations = parse_kitti_tracklets(label_path)
-    proj, ext = read_kitti_calib()
+    annotations = frustum_utils.parse_kitti_tracklets(label_path)
+    proj, ext, cam0_to_cam2_proj = frustum_utils.read_kitti_calib()
     
     num_epochs = 100  # Define your total epoch count here
     
     # Load trained model weights
-    model = SimpleFrustumPointNet().to(device)
+    model = frustum_utils.SimpleFrustumPointNet().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-5)
     scaler = torch.amp.GradScaler('cuda')
-    corner_loss_fn = Custom3DCornerLoss().to(device)
+    corner_loss_fn = frustum_utils.Custom3DCornerLoss().to(device)
         
     checkpoint = torch.load('frustum_pointnet_checkpoint.pth')
     model.load_state_dict(checkpoint['model_state_dict'])
@@ -223,7 +57,7 @@ if __name__ == "__main__":
     # 1. Run inference and draw Predicted 3D Boxes (Red)
     with torch.no_grad():
         for box2d, cls_id in zip(boxes, clss):
-            if int(cls_id) in TARGET_CLASSES.values():
+            if int(cls_id) in frustum_utils.TARGET_CLASSES.values():
                 pts_3d = point_cloud[:, :3]
                 pts_homo = np.hstack((pts_3d, np.ones((pts_3d.shape[0], 1))))
                 pts_cam = (ext @ pts_homo.T).T[:, :3]
@@ -255,7 +89,7 @@ if __name__ == "__main__":
                     pred_box[:3] += centroid
                     
                     # Draw Prediction in Red (B, G, R) -> (0, 0, 255)
-                    img = draw_3d_box(img, pred_box, proj, (0, 0, 255))
+                    img = frustum_utils.draw_3d_box(img, pred_box, proj, (0, 0, 255))
 
                     # Compute evaluation loss against matched ground truth if available
                     for tracklet in annotations:
@@ -267,8 +101,12 @@ if __name__ == "__main__":
                             
                             pred_tensor = torch.tensor(pred_box, dtype=torch.float32).unsqueeze(0)
                             gt_tensor = torch.tensor(gt_box, dtype=torch.float32).unsqueeze(0)
-                            loss = corner_loss_fn(pred_tensor, gt_tensor).item()
                             
+                            loss_l1 = F.smooth_l1_loss(pred_tensor, gt_tensor).item()
+                            loss_corner = corner_loss_fn(pred_tensor, gt_tensor).item()
+                            
+                            loss = loss_l1 + (0.2 * loss_corner)
+
                             total_eval_loss += loss
                             valid_detections_count += 1
                             break
@@ -280,7 +118,7 @@ if __name__ == "__main__":
                 p = tracklet['poses'][pose_idx]
                 gt_box = np.array([p['tx'], p['ty'], p['tz'], tracklet['l'], tracklet['w'], tracklet['h'], p['rz']], dtype=np.float32)
                 # Draw GT in Green -> (0, 255, 0)
-                img = draw_3d_box(img, gt_box, proj, (0, 255, 0))
+                img = frustum_utils.draw_3d_box(img, gt_box, proj, (0, 255, 0))
                        
     if valid_detections_count > 0:
         avg_eval_loss = total_eval_loss / valid_detections_count
