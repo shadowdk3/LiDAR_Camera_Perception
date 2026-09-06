@@ -23,7 +23,7 @@ if __name__ == "__main__":
     
     data_path = "/home/user/LiDAR_Camera_Perception_ws/data/2011_09_26/2011_09_26_drive_0009_sync"
     dataset = frustum_utils.KittiFrustumDataset(data_path, "/home/user/LiDAR_Camera_Perception_ws/models/yolo11n.pt")
-    log_path = "runs/frustum_pointnet_experiment_3d_corner_loss"
+    log_path = "runs/frustum_pointnet_experiment_3d_corner_loss_lr_1e5"
     
     if VISUALIZE_DATASET:
         print(f"=> Starting dataset visualization validation. Total samples: {len(dataset)}")
@@ -66,10 +66,11 @@ if __name__ == "__main__":
     best_loss = float('inf')
     num_epochs = 100
     
-    # Configure Cosine Annealing Learning Rate Scheduler
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-5)
+    learning_rate = 1e-5
     
-    l1_loss_fn = nn.SmoothL1Loss()
+    # Configure Cosine Annealing Learning Rate Scheduler
+    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=learning_rate)
+    
     corner_loss_fn = frustum_utils.Custom3DCornerLoss().to(device)
 
     # Training Loop across multiple epochs
@@ -78,6 +79,9 @@ if __name__ == "__main__":
         # train
         model.train()
         total_train_loss = 0.0
+        total_train_center_loss = 0.0
+        total_train_size_loss = 0.0
+        total_train_corner_loss = 0.0
         
         for batch_points, batch_gt_boxes in train_loader:
             # 3. Move batch data tensors to GPU
@@ -89,24 +93,43 @@ if __name__ == "__main__":
             with torch.amp.autocast('cuda'):
                 predictions = model(batch_points)
                 
-                # Compute the custom 3D corner loss
-                loss_l1 = l1_loss_fn(predictions, batch_gt_boxes)
-                loss_corner = corner_loss_fn(predictions, batch_gt_boxes)   
-            
-                # Combine them with a weight (e.g., 80% L1, 20% Corner Loss)
-                loss = loss_l1 + (0.2 * loss_corner)
+                # 1. Center loss (x, y, z)
+                loss_center = nn.SmoothL1Loss()(predictions[:, :3], batch_gt_boxes[:, :3])
+                
+                # 2. Size loss (l, w, h) - Add this to prevent shrinking
+                loss_size = nn.SmoothL1Loss()(predictions[:, 3:6], batch_gt_boxes[:, 3:6])
 
+                # 3. Corner loss for overall geometry and rotation
+                loss_corner = corner_loss_fn(predictions, batch_gt_boxes)
+                
+                # Combined Loss (weight size slightly higher to expand boxes)
+                loss = loss_center + (0.4 * loss_size) + loss_corner
+                
             # Scaled backward pass
             scaler.scale(loss).backward()                          # Backward pass (compute gradients)
             scaler.step(optimizer)                                 # Update model weights
             scaler.update()
-            total_train_loss += loss.item()
             
-        avg_train_loss = total_train_loss / len(train_loader)
+            # acc batch loss
+            total_train_loss += loss.item()
+            total_train_center_loss += loss_center.item()
+            total_train_size_loss += loss_size.item()
+            total_train_corner_loss += loss_corner.item()
+            
+        # avg epoch loss
+        num_train_batches = len(train_loader)
+        avg_train_loss = total_train_loss / num_train_batches
+        avg_train_center = total_train_center_loss / num_train_batches
+        avg_train_size = total_train_size_loss / num_train_batches
+        avg_train_corner = total_train_corner_loss / num_train_batches
         
         # Eval
         model.eval()
         total_val_loss = 0.0
+        total_val_center = 0.0
+        total_val_size = 0.0
+        total_val_corner = 0.0
+        
         with torch.no_grad():
             for batch_points, batch_gt_boxes in val_loader:
                 batch_points = batch_points.to(device, non_blocking=True)
@@ -114,12 +137,22 @@ if __name__ == "__main__":
                 
                 with torch.amp.autocast('cuda'):
                     predictions = model(batch_points)
-                    # val_loss = F.smooth_l1_loss(predictions, batch_gt_boxes)
-                    val_loss = corner_loss_fn(predictions, batch_gt_boxes)    
+                    val_loss_center = nn.SmoothL1Loss()(predictions[:, :3], batch_gt_boxes[:, :3]) 
+                    val_loss_size = nn.SmoothL1Loss()(predictions[:, 3:6], batch_gt_boxes[:, 3:6])
+                    val_loss_corner = corner_loss_fn(predictions, batch_gt_boxes)
+                    
+                    val_loss = val_loss_center + (0.4 * val_loss_size) + val_loss_corner
                     
                 total_val_loss += val_loss.item()
-                
-        avg_val_loss = total_val_loss / len(val_loader)
+                total_val_center += val_loss_center.item()
+                total_val_size += val_loss_size.item()
+                total_val_corner += val_loss_corner.item()
+                                
+        num_val_batches = len(val_loader)
+        avg_val_loss = total_val_loss / num_val_batches
+        avg_val_center = total_val_center / num_val_batches
+        avg_val_size = total_val_size / num_val_batches
+        avg_val_corner = total_val_corner / num_val_batches
         
         # Step the learning rate scheduler
         scheduler.step()
@@ -130,6 +163,15 @@ if __name__ == "__main__":
         writer.add_scalar('Loss/Train', avg_train_loss, epoch)
         writer.add_scalar('Loss/Val', avg_val_loss, epoch)
         writer.add_scalar('LearningRate', scheduler.get_last_lr()[0], epoch)
+        
+        # Log individual loss components
+        writer.add_scalar('Loss/Train_Center', avg_train_center, epoch)
+        writer.add_scalar('Loss/Train_Size', avg_train_size, epoch)
+        writer.add_scalar('Loss/Train_Corner', avg_train_corner, epoch)
+        
+        writer.add_scalar('Loss/Val_Center', avg_val_center, epoch)
+        writer.add_scalar('Loss/Val_Size', avg_val_size, epoch)
+        writer.add_scalar('Loss/Val_Corner', avg_val_corner, epoch)
         
         if avg_val_loss < best_loss:
             best_loss = avg_val_loss

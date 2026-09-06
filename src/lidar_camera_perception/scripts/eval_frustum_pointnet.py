@@ -2,6 +2,7 @@ import os
 import numpy as np
 import cv2
 import torch
+import torch.nn as nn
 from ultralytics import YOLO
 from torch.utils.tensorboard import SummaryWriter
 import torch.nn.functional as F
@@ -16,7 +17,7 @@ if __name__ == "__main__":
     img_path = os.path.join(data_dir, "image_00/data/0000000400.png")
     bin_path = os.path.join(data_dir, "velodyne_points/data/0000000400.bin")
     label_path = os.path.join(data_dir, "tracklet_labels.xml")
-    log_path = 'runs/frustum_pointnet_eval_3d_corner_loss'
+    log_path = 'runs/frustum_pointnet_eval_3d_corner_loss_lr_1e6'
     
     img = cv2.imread(img_path)
     point_cloud = np.fromfile(bin_path, dtype=np.float32).reshape(-1, 4)
@@ -102,11 +103,18 @@ if __name__ == "__main__":
                             pred_tensor = torch.tensor(pred_box, dtype=torch.float32).unsqueeze(0)
                             gt_tensor = torch.tensor(gt_box, dtype=torch.float32).unsqueeze(0)
                             
-                            loss_l1 = F.smooth_l1_loss(pred_tensor, gt_tensor).item()
+                            # 1. Center loss (x, y, z)
+                            loss_center = nn.SmoothL1Loss()(pred_tensor[:, :3], gt_tensor[:, :3]).item()
+                
+                            # 2. Size loss (l, w, h) - Add this to prevent shrinking
+                            loss_size = nn.SmoothL1Loss()(pred_tensor[:, 3:6], gt_tensor[:, 3:6]).item()
+
+                            # 3. Corner loss for overall geometry and rotation
                             loss_corner = corner_loss_fn(pred_tensor, gt_tensor).item()
                             
-                            loss = loss_l1 + (0.2 * loss_corner)
-
+                            # Combined Loss 
+                            loss = loss_center + (0.25 * loss_size) + loss_corner
+    
                             total_eval_loss += loss
                             valid_detections_count += 1
                             break

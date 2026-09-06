@@ -202,6 +202,19 @@ To eliminate disk I/O bottlenecks and accelerate batch processing for training, 
 
    - Benefit: Significantly reduces memory consumption and accelerates training throughput on compatible GPUs without sacrificing model accuracy.
 
+## Loss Function Architecture
+
+This project employs a multi-task hybrid loss function designed to handle the geometric and spatial constraints of 3D object detection. By breaking down the regression objective into distinct components, the model separately learns absolute positioning, physical sizing, and global geometric alignment.
+
+- **Center Loss (loss_center):** Computes Smooth L1 Loss on the 3D centroid coordinates $(x, y, z)$ (predictions[:, :3] vs batch_gt_boxes[:, :3]). This ensures the model precisely localizes the center of the object within the LiDAR point cloud frame.
+
+- **Size Loss (loss_size):** Computes Smooth L1 Loss on the physical dimensions $(l, w, h)$ (predictions[:, 3:6] vs batch_gt_boxes[:, 3:6]). Separating this from the center prevents scale bias and ensures accurate object bounding box sizing regardless of distance.
+
+- **3D Corner Loss (loss_corner):** Computes the mean absolute error between the 8 predicted 3D bounding box corners and the ground truth corners. This geometric penalty directly supervises the orientation ($rz$) and holistic 3D volume, compensating for limitations in independent coordinate regression.
+
+![loss_result_1](../../../reference/loss_result_1.png)
+
+
 ---------------------------
 
 ## Issue
