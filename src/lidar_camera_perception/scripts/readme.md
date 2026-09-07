@@ -4,7 +4,7 @@
 ![eval_simple_pointnet](../../../reference/training_log.png)
 ![eval_simple_pointnet](../../../reference/train_result_1.png)
 ![eval_simple_pointnet](../../../reference/train_result_2.png)
-
+![fine_tune_1](../../../reference/fine_tune_1.png)
 
 ## Install CUDA
 
@@ -236,6 +236,18 @@ Average Precision (AP) at Various IoU Thresholds: Calculate the proportion of pr
 - **Observation**
 
 Running the evaluation pipeline across the entire validation set of 1,817 samples yields a baseline Mean BEV IoU of 0.5308. This confirms that the Frustum PointNet pipeline successfully generalizes beyond individual cherry-picked frames, robustly extracting and localizing 3D bounding boxes from LiDAR frustums at scale.
+
+### fine tune
+
+```
+loss_weigh = {
+   "loss_center": 2,
+   "loss_size": 1,
+   "loss_corner": 0,
+}
+```
+
+Running the evaluation pipeline across the entire validation set of 1,817 samples yields a baseline Mean BEV IoU of 0.5407.
 
 ---------------------------
 
