@@ -224,6 +224,19 @@ Remaining Bottlenecks: There is still a minor positional offset between the cent
 ![train_result_bev_2](../../../reference/train_result_bev_2.png)
 ![train_result_bev_3](../../../reference/train_result_bev_3.png)
 
+## Improve model
+
+- Expand evaluation scope: Don't just focus on this specific validation sample. Run the model across the entire validation set to calculate 3D or BEV IoU accuracy, ensuring it maintains stable performance on other vehicle samples as well.
+
+Average Precision (AP) at Various IoU Thresholds: Calculate the proportion of predicted boxes that meet performance criteria.
+
+- AP@0.5: The ratio of successful detections where BEV IoU >= 0.5
+- AP@0.7: A stricter threshold requiring BEV IoU >= 0.7$.
+
+- **Observation**
+
+Running the evaluation pipeline across the entire validation set of 1,817 samples yields a baseline Mean BEV IoU of 0.5308. This confirms that the Frustum PointNet pipeline successfully generalizes beyond individual cherry-picked frames, robustly extracting and localizing 3D bounding boxes from LiDAR frustums at scale.
+
 ---------------------------
 
 ## Issue
