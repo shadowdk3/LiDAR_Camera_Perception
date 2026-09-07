@@ -214,6 +214,15 @@ This project employs a multi-task hybrid loss function designed to handle the ge
 
 ![loss_result_1](../../../reference/loss_result_1.png)
 
+The model has fully entered a convergence plateau; the positions and orientations of the red and green boxes have barely changed over the past few dozen epochs.
+
+Key Achievements: The yaw rotation angle of the red box is perfectly aligned with the major axis of the point cloud and successfully encloses the main point cloud cluster, demonstrating that the combination of corner_loss and loss_center has achieved an excellent anchoring effect.
+
+Remaining Bottlenecks: There is still a minor positional offset between the center points (red cross and green circle), and the length and width dimensions of the red box are slightly smaller than the ground-truth green box. This occurs because the gradients under the current learning rate can no longer push the model to achieve finer-grained breakthroughs.
+
+![train_result_bev_1](../../../reference/train_result_bev_1.png)
+![train_result_bev_2](../../../reference/train_result_bev_2.png)
+![train_result_bev_3](../../../reference/train_result_bev_3.png)
 
 ---------------------------
 

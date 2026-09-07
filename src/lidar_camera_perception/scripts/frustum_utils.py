@@ -302,9 +302,18 @@ class KittiFrustumDataset(Dataset):
                     frustum_indices = valid_indices[box_mask]
                     frustum_pts = pts_3d[frustum_indices]
                     
-                    if len(frustum_pts) <= 5:
+                    pts_cam_in_box = pts_cam[valid_mask][box_mask]
+                    
+                    if len(pts_cam_in_box) > 30:
+                        # Filter out ground points and background outliers during frustum extraction
+                        y_cam = pts_cam_in_box[:, 1]
+                        y_min, y_max = np.percentile(y_cam, 5), np.percentile(y_cam, 90)
+                        clean_mask = (y_cam >= y_min) & (y_cam <= y_max)
+                        frustum_pts = frustum_pts[clean_mask]
+                    
+                    if len(frustum_pts) < 5:
                         continue
-                        
+                    
                     # Compute the 2D center point of the YOLO box
                     yolo_center_u = (u1 + u2) / 2.0
                     yolo_center_v = (v1 + v2) / 2.0

@@ -11,9 +11,14 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim.lr_scheduler import CosineAnnealingLR
+import numpy as np
 
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+from matplotlib.transforms import Affine2D
+                    
 import frustum_utils
-    
+
 if __name__ == "__main__":
     VISUALIZE_DATASET = False
     
@@ -24,6 +29,7 @@ if __name__ == "__main__":
     data_path = "/home/user/LiDAR_Camera_Perception_ws/data/2011_09_26/2011_09_26_drive_0009_sync"
     dataset = frustum_utils.KittiFrustumDataset(data_path, "/home/user/LiDAR_Camera_Perception_ws/models/yolo11n.pt")
     log_path = "runs/frustum_pointnet_experiment_3d_corner_loss_lr_1e5"
+    model_path = "frustum_pointnet_checkpoint.pth"
     
     if VISUALIZE_DATASET:
         print(f"=> Starting dataset visualization validation. Total samples: {len(dataset)}")
@@ -103,7 +109,7 @@ if __name__ == "__main__":
                 loss_corner = corner_loss_fn(predictions, batch_gt_boxes)
                 
                 # Combined Loss (weight size slightly higher to expand boxes)
-                loss = loss_center + (0.4 * loss_size) + loss_corner
+                loss = (2.0 * loss_center) + (1 * loss_size) + (1 * loss_corner)
                 
             # Scaled backward pass
             scaler.scale(loss).backward()                          # Backward pass (compute gradients)
@@ -130,8 +136,11 @@ if __name__ == "__main__":
         total_val_size = 0.0
         total_val_corner = 0.0
         
+        # Prepare the container for plotting TensorBoard BEV (we only take the first batch from val_loader for plotting)
+        sample_bev_fig = None
+        
         with torch.no_grad():
-            for batch_points, batch_gt_boxes in val_loader:
+            for batch_idx, (batch_points, batch_gt_boxes) in enumerate(val_loader):
                 batch_points = batch_points.to(device, non_blocking=True)
                 batch_gt_boxes = batch_gt_boxes.to(device, non_blocking=True)
                 
@@ -141,13 +150,52 @@ if __name__ == "__main__":
                     val_loss_size = nn.SmoothL1Loss()(predictions[:, 3:6], batch_gt_boxes[:, 3:6])
                     val_loss_corner = corner_loss_fn(predictions, batch_gt_boxes)
                     
-                    val_loss = val_loss_center + (0.4 * val_loss_size) + val_loss_corner
+                    val_loss = (2 * val_loss_center) + (1 * val_loss_size) + (1 * val_loss_corner)
                     
                 total_val_loss += val_loss.item()
                 total_val_center += val_loss_center.item()
                 total_val_size += val_loss_size.item()
                 total_val_corner += val_loss_corner.item()
-                                
+                
+                # Allows you to see the BEV visualization in TensorBoard at each epoch before training finishes
+                if batch_idx % 10 == 0:
+                    fig, ax = plt.subplots(figsize=(6, 6))
+                    
+                    # Get the first item of data from this batch for plotting
+                    pts_np = batch_points[0].cpu().numpy() # (512, 3)
+                    pred_np = predictions[0].cpu().numpy() # (7,)
+                    gt_np = batch_gt_boxes[0].cpu().numpy() # (7,)
+                    
+                    # Plot normalized point cloud (x, y)
+                    ax.scatter(pts_np[:, 0], pts_np[:, 1], s=1, c='gray', label='Normalized Points')
+                    # Plot predicted box center (red cross)
+                    ax.scatter(pred_np[0], pred_np[1], c='red', marker='x', s=100, label='Pred Center')
+                    # Plot ground truth box center (green circle)
+                    ax.scatter(gt_np[0], gt_np[1], c='green', marker='o', s=80, label='GT Center')
+                    
+                    # Create and plot the 2D bounding box with width, length, and yaw angle (BEV Bounding Box)
+                    def draw_bev_box(box_params, color, label_text):
+                        x, y, z, l, w, h, rz = box_params
+                        # Matplotlib's Rectangle uses the bottom-left corner as its reference point, 
+                        # so we need to subtract half the length and width to shift it back to center.
+                        # Note: In KITTI format, l usually corresponds to car length (forward direction) and w to car width.
+                        rect = Rectangle((-w/2, -l/2), w, l, linewidth=2, edgecolor=color, facecolor='none', label=label_text)
+                        
+                        # Create rotation and translation transformations
+                        transform = Affine2D().rotate_deg_around(0, 0, np.degrees(rz)).translate(x, y) + ax.transData
+                        rect.set_transform(transform)
+                        ax.add_patch(rect)
+                        
+                    draw_bev_box(pred_np, color='red', label_text='Pred Box')
+                    draw_bev_box(gt_np, color='green', label_text='GT Box')
+                    
+                    ax.set_title(f"Epoch {epoch+1} BEV Center Check")
+                    ax.legend(loc='upper right')
+                    ax.grid(True)
+                    
+                    sample_bev_fig = fig
+                    plt.close(fig) # Add this line to prevent memory leaks and warnings
+                    
         num_val_batches = len(val_loader)
         avg_val_loss = total_val_loss / num_val_batches
         avg_val_center = total_val_center / num_val_batches
@@ -159,6 +207,11 @@ if __name__ == "__main__":
         
         print(f"Epoch [{epoch+1}/{num_epochs}] | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")        
         
+        # Write the matplotlib figure to TensorBoard
+        if sample_bev_fig is not None:
+            writer.add_figure('Visual/Val_BEV', sample_bev_fig, epoch)
+            plt.close(sample_bev_fig)
+            
         # Log training loss to TensorBoard
         writer.add_scalar('Loss/Train', avg_train_loss, epoch)
         writer.add_scalar('Loss/Val', avg_val_loss, epoch)
@@ -184,5 +237,5 @@ if __name__ == "__main__":
                 'scaler_state_dict': scaler.state_dict(),
                 'best_loss': best_loss
             }
-            torch.save(checkpoint, 'frustum_pointnet_checkpoint.pth')
+            torch.save(checkpoint, model_path)
             print("=> Saved best training checkpoint.")
