@@ -9,6 +9,7 @@ import open3d as o3d
 from torch.utils.data import Dataset
 
 from ultralytics import YOLO
+from shapely.geometry import Polygon
 
 TARGET_CLASSES = {
     'person': 0, 
@@ -442,3 +443,84 @@ def draw_3d_box(img, box_params, proj_matrix, color):
     for start, end in lines:
         cv2.line(img, tuple(pts_2d[start]), tuple(pts_2d[end]), color, 2)
     return img
+
+
+# Computes the Bird's-Eye View (BEV) IoU between two 3D boxes.
+# Box format: [x, y, z, l, w, h, rz] (KITTI coordinate system)
+def compute_bev_iou(box1, box2):
+  
+    def get_corners(box):
+        x, y, z, l, w, h, rz = box
+        # Correct BEV 4-corner order (front-left, front-right, rear-right, rear-left)
+        x_corners = [l/2, l/2, -l/2, -l/2]
+        y_corners = [w/2, -w/2, -w/2, w/2]
+        corners = np.vstack([x_corners, y_corners])
+        
+        # Rotation matrix (around Z-axis)
+        c, s = np.cos(rz), np.sin(rz)
+        R = np.array([[c, -s], [s, c]])
+        corners = np.dot(R, corners)
+        
+        # Translate to actual center
+        corners[0, :] += x
+        corners[1, :] += y
+        return corners.T # Transpose to shape (4, 2)
+    
+    try:
+        poly1 = Polygon(get_corners(box1))
+        poly2 = Polygon(get_corners(box2))
+        
+        if not poly1.is_valid or not poly2.is_valid:
+            return 0.0
+        
+        inter_area = poly1.intersection(poly2).area
+        union_area = poly1.union(poly2).area
+        
+        if union_area == 0:
+            return 0.0
+        return inter_area / union_area
+    except Exception:
+        return 0.0
+
+def nms_3d(boxes, scores, iou_threshold=0.1):
+    """
+    3D NMS filtering function.
+    boxes: Tensor or numpy array, shape [N, 7] -> [x, y, z, l, w, h, rz] scores:
+    Tensor or numpy array, shape [N] -> predicted confidence scores
+    """
+    if isinstance(boxes, torch.Tensor):
+        boxes = boxes.detach().cpu().numpy()
+    if isinstance(scores, torch.Tensor):
+        scores = scores.detach().cpu().numpy()
+        
+    if len(boxes) == 0:
+        return []
+
+    # Sort by score in descending order
+    sorted_indices = np.argsort(scores)[::-1]
+    keep = []
+
+    while len(sorted_indices) > 0:
+        current = sorted_indices[0]
+        keep.append(current)
+        
+        if len(sorted_indices) == 1:
+            break
+            
+        current_box = boxes[current]
+        other_boxes = boxes[sorted_indices[1:]]
+        other_indices = sorted_indices[1:]
+        
+        # Force compute and print IoU for each box pair
+        for idx, b in zip(other_indices, other_boxes):
+            iou = compute_bev_iou(current_box, b)
+            print(f"Comparing Box {current} and Box {idx} -> BEV IoU: {iou:.4f}")
+            
+        # Compute BEV IoU between current box and remaining boxes
+        ious = np.array([compute_bev_iou(current_box, b) for b in other_boxes])
+        
+        # Keep items with IoU less than the threshold (filtering out redundant boxes with high overlap)        
+        valid_indices = np.where(ious < iou_threshold)[0]
+        sorted_indices = sorted_indices[valid_indices + 1]
+
+    return keep
