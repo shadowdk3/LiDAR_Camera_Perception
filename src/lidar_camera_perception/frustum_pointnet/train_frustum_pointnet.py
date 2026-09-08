@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.transforms import Affine2D
                     
-import frustum_utils
+from utils import frustum_utils
 
 if __name__ == "__main__":
     VISUALIZE_DATASET = False
@@ -27,9 +27,10 @@ if __name__ == "__main__":
     print(f"=> Using device: {device}")
     
     data_path = "/home/user/LiDAR_Camera_Perception_ws/data/2011_09_26/2011_09_26_drive_0009_sync"
+    log_path = "runs/frustum_pointnet_experiment"
+    model_path = "checkpoints/frustum_pointnet_checkpoint.pth"
+    
     dataset = frustum_utils.KittiFrustumDataset(data_path, "/home/user/LiDAR_Camera_Perception_ws/models/yolo11n.pt")
-    log_path = "runs/frustum_pointnet_experiment_3d_corner_loss_lr_1e5"
-    model_path = "frustum_pointnet_checkpoint.pth"
     
     if VISUALIZE_DATASET:
         print(f"=> Starting dataset visualization validation. Total samples: {len(dataset)}")

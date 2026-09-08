@@ -2,7 +2,11 @@
 -------------------------------------
 
 ![eval_simple_pointnet](../../../reference/training_log.png)
+
+Model
 ![eval_simple_pointnet](../../../reference/train_result_1.png)
+
+Fine-Tune
 ![fine_tune_2](../../../reference/fine_tune_2.png)
 
 ## Install CUDA
@@ -55,19 +59,6 @@ sudo apt update && sudo apt install -y libgles2 libgles2-mesa-dev
 ```
 
 
-## Repository Structure
-
-```
-script/
-├── test_frustum_crop.py         # Main test script for projection, frustum extraction, and Open3D visualization
-├── frustum_pointnet_pipeline.py # Validation tool for pipeline inspection and single-frame testing
-├── train_frustum_pointnet.py    # End-to-end training loop script with checkpoint saving
-├── eval_frustum_pointnet.py     # Quantitative evaluation script calculating Mean Smooth L1 Loss across validation data
-├── data_clean_KITTI.py          # KITTI 3D Tracklet Cleaner and XML DOM Sanitizer
-└── README.md
-```
-
-
 ## Learning Objective
 
 - **Data Cleaning & Quality Control (data_clean_KITTI.py):** Master XML DOM manipulation and geometric depth validation to programmatically detect and strip degenerate bounding box poses ($Z \le 0.1$) while preserving dataset structure.
@@ -75,6 +66,7 @@ script/
 - **Sensor Fusion & Geometric Projection (test_frustum_crop.py):** Learn how to chain extrinsic, rectification, and projection calibration matrices to map LiDAR point clouds into camera image planes and crop 2D-guided 3D frustums.
 
 - **3D Deep Learning & Regression (frustum_pointnet_pipeline.py):** Understand how to normalize dynamic point clouds into fixed-shape tensors via zero-centering and padding, and train a neural network to regress 7D bounding box parameters using Smooth L1 Loss.
+
 
 ## LiDAR-Camera Fusion & Frustum PointNet 3D Detection
 
@@ -201,6 +193,7 @@ To eliminate disk I/O bottlenecks and accelerate batch processing for training, 
 
    - Benefit: Significantly reduces memory consumption and accelerates training throughput on compatible GPUs without sacrificing model accuracy.
 
+
 ## Loss Function Architecture
 
 This project employs a multi-task hybrid loss function designed to handle the geometric and spatial constraints of 3D object detection. By breaking down the regression objective into distinct components, the model separately learns absolute positioning, physical sizing, and global geometric alignment.
@@ -222,6 +215,7 @@ Remaining Bottlenecks: There is still a minor positional offset between the cent
 ![train_result_bev_1](../../../reference/train_result_bev_1.png)
 ![train_result_bev_2](../../../reference/train_result_bev_2.png)
 ![train_result_bev_3](../../../reference/train_result_bev_3.png)
+
 
 ## Improve model
 

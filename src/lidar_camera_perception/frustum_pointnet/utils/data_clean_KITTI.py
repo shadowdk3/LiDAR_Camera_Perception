@@ -13,7 +13,6 @@ import os
 import cv2
 import numpy as np
 import xml.etree.ElementTree as ET
-from xml.dom import minidom
 import shutil
 
 TARGET_CLASSES = {
