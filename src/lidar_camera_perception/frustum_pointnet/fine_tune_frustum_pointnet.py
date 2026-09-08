@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.transforms import Affine2D
                     
-import frustum_utils
+from utils import frustum_utils
 
 def fine_tune_frustum_pointnet():
     VISUALIZE_DATASET = False
@@ -19,16 +19,16 @@ def fine_tune_frustum_pointnet():
     print(f"=> Using device: {device}")
     
     data_path = "/home/user/LiDAR_Camera_Perception_ws/data/2011_09_26/2011_09_26_drive_0009_sync"
-    log_path = "runs/frustum_pointnet_experiment_3d_corner_loss_lr_1e5_fine_tune"
-    frustum_model_path = "frustum_pointnet_checkpoint.pth"
-    output_model_path = "frustum_pointnet_checkpoint_fine_tune.pth"
+    log_path = "runs/frustum_pointnet_experiment_fine_tune"
+    frustum_model_path = "checkpoints/frustum_pointnet_checkpoint.pth"
+    output_model_path = "checkpoints/frustum_pointnet_checkpoint_fine_tune.pth"
 
     dataset = frustum_utils.KittiFrustumDataset(data_path, "/home/user/LiDAR_Camera_Perception_ws/models/yolo11n.pt")
     
     loss_weigh = {
-        "loss_center": 2,
+        "loss_center": 3,
         "loss_size": 1,
-        "loss_corner": 0,
+        "loss_corner": 0.1,
     }
     
     if VISUALIZE_DATASET:

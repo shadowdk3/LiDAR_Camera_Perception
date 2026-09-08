@@ -1,6 +1,6 @@
 import torch
 from torch.utils.data import DataLoader
-import frustum_utils
+from utils import frustum_utils
 import numpy as np
 import os
 
@@ -9,7 +9,7 @@ def evaluate_full_validation_set():
     
     data_path = "/home/user/LiDAR_Camera_Perception_ws/data/2011_09_26/2011_09_26_drive_0009_sync"
     yolo_model_path = "/home/user/LiDAR_Camera_Perception_ws/models/yolo11n.pt"
-    frustum_model_path = "frustum_pointnet_checkpoint_1_0_3_1_2.pth"
+    frustum_model_path = "checkpoints/frustum_pointnet_checkpoint.pth"
 
     # Load model weights
     model = frustum_utils.SimpleFrustumPointNet().to(device)

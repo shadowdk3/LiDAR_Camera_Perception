@@ -9,6 +9,7 @@ __pycache__/
 # Training runs and output directories
 runs/
 **/runs/
+**/checkpoints/
 
 # training data and models
 data/
