@@ -61,12 +61,13 @@ sudo apt update && sudo apt install -y libgles2 libgles2-mesa-dev
 
 ## Learning Objective
 
-- **Data Cleaning & Quality Control (data_clean_KITTI.py):** Master XML DOM manipulation and geometric depth validation to programmatically detect and strip degenerate bounding box poses ($Z \le 0.1$) while preserving dataset structure.
+- **Train Model (train_frustum_pointnet.py):** Initializes the baseline Frustum PointNet architecture, normalizes point clouds, and trains on KITTI data to establish initial 7D bounding box regression.
 
-- **Sensor Fusion & Geometric Projection (test_frustum_crop.py):** Learn how to chain extrinsic, rectification, and projection calibration matrices to map LiDAR point clouds into camera image planes and crop 2D-guided 3D frustums.
+- **Fine-Tune Model (fine_tune_frustum_pointnet.py):** Lowers the learning rate ($1e-5$) and adjusts loss weights to fix box shrinking, breaking performance plateaus to achieve high Mean BEV IoU.
 
-- **3D Deep Learning & Regression (frustum_pointnet_pipeline.py):** Understand how to normalize dynamic point clouds into fixed-shape tensors via zero-centering and padding, and train a neural network to regress 7D bounding box parameters using Smooth L1 Loss.
+- **Evaluate (evaluate_bev_iou.py / evaluate_single_frustum_pointnet.py):** Computes validation metrics across the dataset and visualizes predicted bounding boxes against ground truth.
 
+- **ONNX Export (export_to_onnx.py):** Serializes the fine-tuned PyTorch checkpoint into an optimized frustum_pointnet_fine_tune.onnx graph inside the onnx/ directory for fast ROS2 deployment.
 
 ## LiDAR-Camera Fusion & Frustum PointNet 3D Detection
 

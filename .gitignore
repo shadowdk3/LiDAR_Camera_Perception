@@ -10,6 +10,7 @@ __pycache__/
 runs/
 **/runs/
 **/checkpoints/
+**/onnx/
 
 # training data and models
 data/

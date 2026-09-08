@@ -28,7 +28,7 @@ def fine_tune_frustum_pointnet():
     loss_weigh = {
         "loss_center": 3,
         "loss_size": 1,
-        "loss_corner": 0.1,
+        "loss_corner": 0,
     }
     
     if VISUALIZE_DATASET:
