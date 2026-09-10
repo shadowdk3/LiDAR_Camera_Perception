@@ -48,7 +48,7 @@ if __name__ == "__main__":
 
         for idx in range(len(dataset)):
             # Retrieve tensor data
-            sampled_pts, gt_box = dataset[idx]
+            sampled_pts, gt_box, batch_mark = dataset[idx]
             
             # Retrieve original paths and data from cache for visualization
             raw_sample = dataset.cached_data[idx]
