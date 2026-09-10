@@ -67,6 +67,87 @@ class SimpleFrustumPointNet(nn.Module):
         # Regress final 3D bounding box parameters from the global feature vector -> Output shape: (B, 7)
         box_params = self.fc(x) # (B, 7)
         return box_params
+
+class FrustumPointNetV2(nn.Module):
+    def __init__(self):
+        super(FrustumPointNetV2, self).__init__()
+        
+        # T-Net: Predicts a 3D translation offset to center the point cloud
+        self.tnet = nn.Sequential(
+            nn.Conv1d(3, 64, 1), nn.BatchNorm1d(64), nn.ReLU(),
+            nn.Conv1d(64, 128, 1), nn.BatchNorm1d(128), nn.ReLU(),
+            nn.Conv1d(128, 1024, 1), nn.BatchNorm1d(1024), nn.ReLU(),
+            nn.AdaptiveMaxPool1d(1),
+            nn.Flatten(),
+            nn.Linear(1024, 512), nn.ReLU(),
+            nn.Linear(512, 256), nn.ReLU(),
+            nn.Linear(256, 3) # outputs [dx, dy, dz]
+        )
+
+        # Shared MLP for point feature extraction (after centering)
+        self.mlp1 = nn.Sequential(
+            nn.Conv1d(3, 64, 1), nn.BatchNorm1d(64), nn.ReLU(),
+            nn.Conv1d(64, 128, 1), nn.BatchNorm1d(128), nn.ReLU(),
+        )
+        
+        # Segmentation Head: Classifies each point as foreground (object) or background
+        # Output: (B, 2, N) for binary classification per point
+        self.seg_head = nn.Sequential(
+            nn.Conv1d(128, 128, 1), nn.BatchNorm1d(128), nn.ReLU(),
+            nn.Conv1d(128, 2, 1) 
+        )
+
+        # Feature extraction for masked foreground points
+        self.mlp2 = nn.Sequential(
+            nn.Conv1d(128, 512, 1), nn.BatchNorm1d(512), nn.ReLU(),
+            nn.Conv1d(512, 1024, 1), nn.BatchNorm1d(1024), nn.ReLU()
+        )
+        
+        # Regression Head for 3D Bounding Box: [x, y, z, l, w, h, yaw]
+        self.fc = nn.Sequential(
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 7)
+        )
+
+    def forward(self, points):
+        # points shape: (B, N, 3)
+        B, N, _ = points.shape
+        x = points.permute(0, 2, 1) # (B, 3, N)
+        
+        # 1. Spatial alignment using T-Net
+        center_offset = self.tnet(x) # (B, 3)
+        x_centered = x - center_offset.unsqueeze(2) # Center the points
+        
+        # 2. Extract local point features
+        point_features = self.mlp1(x_centered) # (B, 128, N)
+        
+        # 3. Predict point-wise segmentation masks (Foreground vs Background)
+        logits = self.seg_head(point_features) # (B, 2, N)
+        mask = torch.argmax(logits, dim=1) # (B, N) - 1 for foreground, 0 for background
+        
+        # 4. Enhance features using only foreground points (or weight them)
+        # Pass through second feature extractor
+        global_features = self.mlp2(point_features) # (B, 1024, N)
+        
+        # Apply mask during max-pooling to ignore background noise
+        # Expand mask to match feature channels: (B, 1, N)
+        mask_expanded = mask.unsqueeze(1).float()
+        global_features = global_features * mask_expanded
+        
+        # Symmetric max pooling across points
+        x_global = torch.max(global_features, dim=2)[0] # (B, 1024)
+        
+        # 5. Regress final box parameters
+        box_params = self.fc(x_global) # (B, 7)
+        
+        # Add back the T-Net offset to spatial coordinates [x, y, z]
+        box_params[:, 0:3] += center_offset
+        
+        return box_params, logits, center_offset
     
 # Custom3DCornerLoss: A PyTorch loss module that computes the distance between predicted 
 # and ground-truth 3D bounding boxes by converting 7D box parameters ([x, y, z, l, w, h, rz]) 
@@ -387,23 +468,56 @@ class KittiFrustumDataset(Dataset):
     def __len__(self):
         return len(self.cached_data)
 
+    # Empty Frustum Check: Returns zero-tensors if no LiDAR points are found.
+    # Local Masking: Transforms points into the box's local coordinate frame via inverse Z-axis rotation to generate binary foreground/background segmentation masks.
+    # Centroid Normalization: Shifts the point cloud to center it at the origin.
+    # Uniform Sampling: Randomly samples exactly 512 points using identical index tracking to keep points and masks perfectly aligned.
+    # GT Box Alignment: Adjusts the 3D bounding box center coordinates by subtracting the point cloud centroid.
+    # Tensor Conversion: Outputs final PyTorch tensors (float32 and long) ready for training ingestion.
     def __getitem__(self, idx):
         sample = self.cached_data[idx]
         frustum_pts = sample['frustum_pts']
         gt_box = sample['gt_box'].copy()
         
+        # Calculate segmentation mask (0: background/other, 1: target object) within the 3D bounding box
+        cx, cy, cz, l, w, h, rz = gt_box
+        pts_trans = frustum_pts - np.array([cx, cy, cz])
+        
+        # Transform points into the box's local coordinate system via inverse rotation around the Z-axis (-rz)
+        cos_r = np.cos(-rz)
+        sin_r = np.sin(-rz)
+        x_local = cos_r * pts_trans[:, 0] - sin_r * pts_trans[:, 1]
+        y_local = sin_r * pts_trans[:, 0] + cos_r * pts_trans[:, 1]
+        z_local = pts_trans[:, 2]
+        
+        # Determine whether each point lies strictly within the 3D bounding box boundaries
+        mask = (np.abs(x_local) <= l / 2.0) & \
+               (np.abs(y_local) <= w / 2.0) & \
+               (np.abs(z_local) <= h / 2.0)
+        mask = mask.astype(np.int64)
+        
+        # Perform centroid normalization on the frustum point cloud
         centroid = np.mean(frustum_pts, axis=0)
         norm_pts = frustum_pts - centroid
         
-        if len(norm_pts) >= 512:
-            choice = np.random.choice(len(norm_pts), 512, replace=False)
+        # Fixed sampling of 512 points (applying identical random indices to both points and mask)
+        num_pts = len(norm_pts)
+        if num_pts >= 512:
+            choice = np.random.choice(num_pts, 512, replace=False)
         else:
-            choice = np.random.choice(len(norm_pts), 512, replace=True)
+            choice = np.random.choice(num_pts, 512, replace=True)
+            
         sampled_pts = norm_pts[choice]
+        sampled_mask = mask[choice]
         
+        # Synchronize the GT box center by subtracting the point cloud centroid
         gt_box[:3] -= centroid
         
-        return torch.tensor(sampled_pts, dtype=torch.float32), torch.tensor(gt_box, dtype=torch.float32)
+        return (
+            torch.tensor(sampled_pts, dtype=torch.float32), 
+            torch.tensor(gt_box, dtype=torch.float32), 
+            torch.tensor(sampled_mask, dtype=torch.long)
+        )
 
 # draw_3d_box: Projects a 3D bounding box defined by 7D parameters onto a 2D image plane 
 # using a projection matrix, handling coordinate transformations and rendering the 12 edges 

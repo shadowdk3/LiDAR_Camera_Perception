@@ -9,7 +9,9 @@ Model
 Fine-Tune
 ![fine_tune_2](../../../reference/fine_tune_2.png)
 
-## Install CUDA
+## Requirement 
+
+### Install CUDA
 
 ```
 wget https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-wsl-ubuntu.pin
@@ -35,7 +37,7 @@ nvcc --version
 ```
 
 
-## Pytorch
+### Pytorch
 
 ```
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
@@ -49,7 +51,7 @@ pip install "numpy<2.0"
 ```
 
 
-## Install Dependencies
+### Install Dependencies
 
 ```
 pip install open3d
@@ -61,12 +63,13 @@ sudo apt update && sudo apt install -y libgles2 libgles2-mesa-dev
 
 ## Learning Objective
 
-- **Data Cleaning & Quality Control (data_clean_KITTI.py):** Master XML DOM manipulation and geometric depth validation to programmatically detect and strip degenerate bounding box poses ($Z \le 0.1$) while preserving dataset structure.
+- **Train Model (train_frustum_pointnet.py):** Initializes the baseline Frustum PointNet architecture, normalizes point clouds, and trains on KITTI data to establish initial 7D bounding box regression.
 
-- **Sensor Fusion & Geometric Projection (test_frustum_crop.py):** Learn how to chain extrinsic, rectification, and projection calibration matrices to map LiDAR point clouds into camera image planes and crop 2D-guided 3D frustums.
+- **Fine-Tune Model (fine_tune_frustum_pointnet.py):** Lowers the learning rate ($1e-5$) and adjusts loss weights to fix box shrinking, breaking performance plateaus to achieve high Mean BEV IoU.
 
-- **3D Deep Learning & Regression (frustum_pointnet_pipeline.py):** Understand how to normalize dynamic point clouds into fixed-shape tensors via zero-centering and padding, and train a neural network to regress 7D bounding box parameters using Smooth L1 Loss.
+- **Evaluate (evaluate_bev_iou.py / evaluate_single_frustum_pointnet.py):** Computes validation metrics across the dataset and visualizes predicted bounding boxes against ground truth.
 
+- **ONNX Export (export_to_onnx.py):** Serializes the fine-tuned PyTorch checkpoint into an optimized frustum_pointnet_fine_tune.onnx graph inside the onnx/ directory for fast ROS2 deployment.
 
 ## LiDAR-Camera Fusion & Frustum PointNet 3D Detection
 
@@ -128,11 +131,11 @@ KITTI 3D Tracklet Cleaner and Visualizer. This script processes KITTI dataset tr
 
 ### train_frustum_pointnet.py
 
-1. **Define PyTorch Dataset class:** Inherit from torch.utils.data.Dataset. Scan all image, LiDAR bin, and label paths in the KITTI directory within init, and implement single-frame YOLO detection, frustum point-cloud extraction, and padding to 512 points within getitem.
+1. **Define PyTorch Dataset class:** Inherit from torch.utils.data.Dataset. Scan all image, LiDAR bin, and label paths in the KITTI directory within __init__, and implement single-frame YOLO detection, frustum point-cloud extraction, and padding to 512 points within __getitem__.
 
 2. **Create DataLoader:** Encapsulate data into an iterable batch data structure using torch.utils.data.DataLoader(dataset, batch_size=4, shuffle=True).
 
-3. **Implement training loop and optimizer:** Initialize model = SimpleFrustumPointNet() and optimizer = torch.optim.Adam(model.parameters(), lr=0.001).
+3. **Implement training loop and optimizer:** Initialize model = FrustumPointNetV2() and optimizer = torch.optim.Adam(model.parameters(), lr=0.001).
 
 4. **Execute multi-epoch training:** Wrap with an outer loop for epoch in range(num_epochs):, sequentially calling optimizer.zero_grad(), loss.backward(), and optimizer.step() in the inner loop.
 
@@ -204,6 +207,10 @@ This project employs a multi-task hybrid loss function designed to handle the ge
 
 - **3D Corner Loss (loss_corner):** Computes the mean absolute error between the 8 predicted 3D bounding box corners and the ground truth corners. This geometric penalty directly supervises the orientation ($rz$) and holistic 3D volume, compensating for limitations in independent coordinate regression.
 
+- **Segmentation loss**
+
+- **Batch mark loss**
+
 ![loss_result_1](../../../reference/loss_result_1.png)
 
 The model has fully entered a convergence plateau; the positions and orientations of the red and green boxes have barely changed over the past few dozen epochs.
@@ -216,33 +223,25 @@ Remaining Bottlenecks: There is still a minor positional offset between the cent
 ![train_result_bev_2](../../../reference/train_result_bev_2.png)
 ![train_result_bev_3](../../../reference/train_result_bev_3.png)
 
+## Performance Evaluation & ResultsBaseline Evaluation 
 
-## Improve model
-
-- Expand evaluation scope: Don't just focus on this specific validation sample. Run the model across the entire validation set to calculate 3D or BEV IoU accuracy, ensuring it maintains stable performance on other vehicle samples as well.
-
-Average Precision (AP) at Various IoU Thresholds: Calculate the proportion of predicted boxes that meet performance criteria.
-
-- AP@0.5: The ratio of successful detections where BEV IoU >= 0.5
-- AP@0.7: A stricter threshold requiring BEV IoU >= 0.7$.
-
-- **Observation**
-
-Running the evaluation pipeline across the entire validation set of 1,817 samples yields a baseline Mean BEV IoU of 0.5308. This confirms that the Frustum PointNet pipeline successfully generalizes beyond individual cherry-picked frames, robustly extracting and localizing 3D bounding boxes from LiDAR frustums at scale.
-
-### fine tune
-
-![fine_tune_1](../../../reference/fine_tune_1.png)
+- base line:
 
 ```
-loss_weigh = {
-   "loss_center": 2,
-   "loss_size": 1,
-   "loss_corner": 0,
-}
+Validation Mean BEV IoU: 0.5744
+Validation Mean 3D IoU: 0.5257
+Validation Center Distance Error (MAE): 1.3278 m
+Validation Mean Heading Error: 19.87°
 ```
 
-Running the evaluation pipeline across the entire validation set of 1,817 samples yields a baseline Mean BEV IoU of 0.5407.
+- Fine-Tuned 
+
+```
+Validation Mean BEV IoU: 0.6080
+Validation Mean 3D IoU: 0.5572
+Validation Center Distance Error (MAE): 1.2464 m
+Validation Mean Heading Error: 18.29°
+```
 
 ---------------------------
 
