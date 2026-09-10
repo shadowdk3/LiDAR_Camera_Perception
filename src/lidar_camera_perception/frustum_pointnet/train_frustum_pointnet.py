@@ -19,18 +19,29 @@ from matplotlib.transforms import Affine2D
                     
 from utils import frustum_utils
 
+# Loss weights for multi-task optimization balancing
+LOSS_WEIGHT = {
+    'corner_loss': 1,
+    'size_loss': 1,
+    'center_loss': 1,
+    'seg_loss': 1,
+    'tnet_loss': 1,
+}
+
 if __name__ == "__main__":
     VISUALIZE_DATASET = False
     
-    # 1. Automatically select GPU if available
+    # Automatically select compute device (GPU if available)    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"=> Using device: {device}")
     
     data_path = "/home/user/LiDAR_Camera_Perception_ws/data/2011_09_26/2011_09_26_drive_0009_sync"
     log_path = "runs/frustum_pointnet_experiment"
-    model_path = "checkpoints/frustum_pointnet_checkpoint.pth"
+    model_path = "checkpoints/frustum_pointnet_checkpoint_base_line.pth"
+    yolo_path = "/home/user/LiDAR_Camera_Perception_ws/models/yolo11n.pt"
     
-    dataset = frustum_utils.KittiFrustumDataset(data_path, "/home/user/LiDAR_Camera_Perception_ws/models/yolo11n.pt")
+    # Initialize KITTI Frustum dataset with YOLO detector integration
+    dataset = frustum_utils.KittiFrustumDataset(data_path, yolo_path)
     
     if VISUALIZE_DATASET:
         print(f"=> Starting dataset visualization validation. Total samples: {len(dataset)}")
@@ -44,8 +55,7 @@ if __name__ == "__main__":
             
             print(f"Viewing sample {idx + 1} / {len(dataset)}...")
             
-            # Call the Open3D visualization function
-            # visualize_sample reads raw_sample['bin_path'] and raw_sample['img_path'], then draws the 3D bounding box using gt_box
+            # Open3D visualization for raw point clouds and 3D bounding boxes
             frustum_utils.visualize_sample(
                 bin_path=raw_sample['bin_path'], 
                 img_path=raw_sample['img_path'], 
@@ -57,61 +67,78 @@ if __name__ == "__main__":
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
     
+    # Construct data loaders with pinned memory for optimal GPU transfer
     train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=0, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, num_workers=0, pin_memory=True)
     
-    # 2. Move model to GPU
-    model = frustum_utils.SimpleFrustumPointNet().to(device)
+    # Instantiate perception model and move to target hardware device
+    model = frustum_utils.FrustumPointNetV2().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     
     # Initialize TensorBoard writer
     writer = SummaryWriter(log_dir=log_path)
     
-    # Enable Automatic Mixed Precision (AMP) for faster FP16 training and lower memory overhead
+    # Automatic Mixed Precision (AMP) scaler for FP16 efficiency
     scaler = torch.amp.GradScaler('cuda')
 
     best_loss = float('inf')
     num_epochs = 100
-    
     learning_rate = 1e-5
     
     # Configure Cosine Annealing Learning Rate Scheduler
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=learning_rate)
     
+    # Initialize loss functions
     corner_loss_fn = frustum_utils.Custom3DCornerLoss().to(device)
+    segmentation_loss_fn = nn.CrossEntropyLoss().to(device)
 
-    # Training Loop across multiple epochs
     print(f"=> Starting training for {num_epochs} epochs across {len(train_loader)} training samples...")
     for epoch in range(num_epochs):
-        # train
+        
+        # Training Phase
         model.train()
         total_train_loss = 0.0
         total_train_center_loss = 0.0
         total_train_size_loss = 0.0
         total_train_corner_loss = 0.0
+        total_train_seg_loss = 0.0
+        total_train_tnet_loss = 0.0
         
-        for batch_points, batch_gt_boxes in train_loader:
-            # 3. Move batch data tensors to GPU
+        for batch_points, batch_gt_boxes, batch_mask in train_loader:
+            # Transfer batch tensors to GPU asynchronously
             batch_points = batch_points.to(device, non_blocking=True)
             batch_gt_boxes = batch_gt_boxes.to(device, non_blocking=True)
+            batch_mask = batch_mask.to(device, dtype=torch.long, non_blocking=True)
             
-            optimizer.zero_grad()                                   # Clear previous gradients
+            # Clear previous gradients
+            optimizer.zero_grad()                                   
+            
             # Mixed precision forward pass
             with torch.amp.autocast('cuda'):
-                predictions = model(batch_points)
+                predictions, logits, center_offset = model(batch_points)
+
+                # Point-wise segmentation loss (CrossEntropy classifying each frustum point as foreground object or background)
+                loss_seg = segmentation_loss_fn(logits, batch_mask) 
                 
-                # 1. Center loss (x, y, z)
+                # T-Net center offset loss (Smooth L1 regression supervising the spatial shift from point cloud centroid to object center)
+                loss_tnet = nn.SmoothL1Loss()(center_offset, batch_gt_boxes[:, :3])
+    
+                # 3D bounding box center loss (Smooth L1 regression supervising predicted box center coordinates x, y, z)
                 loss_center = nn.SmoothL1Loss()(predictions[:, :3], batch_gt_boxes[:, :3])
                 
-                # 2. Size loss (l, w, h) - Add this to prevent shrinking
+                # 3D bounding box size loss (Smooth L1 regression supervising object physical dimensions length, width, height)
                 loss_size = nn.SmoothL1Loss()(predictions[:, 3:6], batch_gt_boxes[:, 3:6])
 
-                # 3. Corner loss for overall geometry and rotation
+                # 3D bounding box corner loss (Geometric loss penalizing spatial deviations across all 8 3D box corners and heading orientation)
                 loss_corner = corner_loss_fn(predictions, batch_gt_boxes)
-                
-                # Combined Loss (weight size slightly higher to expand boxes)
-                loss = (2.0 * loss_center) + (1 * loss_size) + (1 * loss_corner)
-                
+
+                # Weighted multi-task loss aggregation
+                loss = (LOSS_WEIGHT['seg_loss'] * loss_seg) + \
+                       (LOSS_WEIGHT['center_loss'] * loss_center) + \
+                       (LOSS_WEIGHT['size_loss'] * loss_size) + \
+                       (LOSS_WEIGHT['corner_loss'] * loss_corner) + \
+                       (LOSS_WEIGHT['tnet_loss'] * loss_tnet)
+                       
             # Scaled backward pass
             scaler.scale(loss).backward()                          # Backward pass (compute gradients)
             scaler.step(optimizer)                                 # Update model weights
@@ -122,6 +149,8 @@ if __name__ == "__main__":
             total_train_center_loss += loss_center.item()
             total_train_size_loss += loss_size.item()
             total_train_corner_loss += loss_corner.item()
+            total_train_seg_loss += loss_seg.item()
+            total_train_tnet_loss += loss_tnet.item()
             
         # avg epoch loss
         num_train_batches = len(train_loader)
@@ -129,36 +158,48 @@ if __name__ == "__main__":
         avg_train_center = total_train_center_loss / num_train_batches
         avg_train_size = total_train_size_loss / num_train_batches
         avg_train_corner = total_train_corner_loss / num_train_batches
+        avg_train_seg = total_train_seg_loss / num_train_batches
+        avg_train_tnet = total_train_tnet_loss / num_train_batches
         
-        # Eval
+        # Eval Phase
         model.eval()
         total_val_loss = 0.0
         total_val_center = 0.0
         total_val_size = 0.0
         total_val_corner = 0.0
+        total_val_seg = 0.0
+        total_val_tnet = 0.0
         
         # Prepare the container for plotting TensorBoard BEV (we only take the first batch from val_loader for plotting)
         sample_bev_fig = None
         
         with torch.no_grad():
-            for batch_idx, (batch_points, batch_gt_boxes) in enumerate(val_loader):
+            for batch_idx, (batch_points, batch_gt_boxes, batch_mask) in enumerate(val_loader):
                 batch_points = batch_points.to(device, non_blocking=True)
                 batch_gt_boxes = batch_gt_boxes.to(device, non_blocking=True)
+                batch_mask = batch_mask.to(device, dtype=torch.long, non_blocking=True) # 確保是 long 型態
                 
                 with torch.amp.autocast('cuda'):
-                    predictions = model(batch_points)
+                    predictions, logits, center_offset = model(batch_points)
                     val_loss_center = nn.SmoothL1Loss()(predictions[:, :3], batch_gt_boxes[:, :3]) 
                     val_loss_size = nn.SmoothL1Loss()(predictions[:, 3:6], batch_gt_boxes[:, 3:6])
                     val_loss_corner = corner_loss_fn(predictions, batch_gt_boxes)
-                    
-                    val_loss = (2 * val_loss_center) + (1 * val_loss_size) + (1 * val_loss_corner)
-                    
+                    val_loss_seg = segmentation_loss_fn(logits, batch_mask)
+                    val_loss_tnet = nn.SmoothL1Loss()(center_offset, batch_gt_boxes[:, :3])
+
+                    val_loss = (LOSS_WEIGHT['seg_loss'] * val_loss_seg) + \
+                               (LOSS_WEIGHT['center_loss'] * val_loss_center) + \
+                               (LOSS_WEIGHT['size_loss'] * val_loss_size) + \
+                               (LOSS_WEIGHT['corner_loss'] * val_loss_corner) + \
+                               (LOSS_WEIGHT['tnet_loss'] * val_loss_tnet)
+                               
                 total_val_loss += val_loss.item()
                 total_val_center += val_loss_center.item()
                 total_val_size += val_loss_size.item()
                 total_val_corner += val_loss_corner.item()
+                total_val_seg += val_loss_seg.item()
                 
-                # Allows you to see the BEV visualization in TensorBoard at each epoch before training finishes
+                    # Render Bird's-Eye View (BEV) visualization for TensorBoard inspection
                 if batch_idx % 10 == 0:
                     fig, ax = plt.subplots(figsize=(6, 6))
                     
@@ -197,11 +238,14 @@ if __name__ == "__main__":
                     sample_bev_fig = fig
                     plt.close(fig) # Add this line to prevent memory leaks and warnings
                     
+        # Calculate epoch-level validation averages                    
         num_val_batches = len(val_loader)
         avg_val_loss = total_val_loss / num_val_batches
         avg_val_center = total_val_center / num_val_batches
         avg_val_size = total_val_size / num_val_batches
         avg_val_corner = total_val_corner / num_val_batches
+        avg_val_seg = total_val_seg / num_val_batches
+        avg_val_tnet = total_val_tnet / num_val_batches
         
         # Step the learning rate scheduler
         scheduler.step()
@@ -222,14 +266,18 @@ if __name__ == "__main__":
         writer.add_scalar('Loss/Train_Center', avg_train_center, epoch)
         writer.add_scalar('Loss/Train_Size', avg_train_size, epoch)
         writer.add_scalar('Loss/Train_Corner', avg_train_corner, epoch)
+        writer.add_scalar('Loss/Train_Seg', avg_train_seg, epoch)
+        writer.add_scalar('Loss/Train_Tnet', avg_train_tnet, epoch)
         
         writer.add_scalar('Loss/Val_Center', avg_val_center, epoch)
         writer.add_scalar('Loss/Val_Size', avg_val_size, epoch)
         writer.add_scalar('Loss/Val_Corner', avg_val_corner, epoch)
+        writer.add_scalar('Loss/Val_Seg', avg_val_seg, epoch)
+        writer.add_scalar('Loss/Val_Tnet', avg_val_tnet, epoch)
         
+        # Save checkpoint if validation loss reaches a new minimum
         if avg_val_loss < best_loss:
             best_loss = avg_val_loss
-            # Save comprehensive checkpoint dictionary
             checkpoint = {
                 'epoch': epoch + 1,
                 'model_state_dict': model.state_dict(),
