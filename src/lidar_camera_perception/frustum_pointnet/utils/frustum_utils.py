@@ -286,9 +286,8 @@ def parse_kitti_tracklets(xml_path):
 # visualize_sample: Loads a KITTI LiDAR point cloud and an RGB image, builds an Open3D 
 # point cloud object, creates oriented 3D bounding boxes for ground-truth (green) and 
 # optional predictions (red), and renders them in an interactive 3D visualization window.
-def visualize_sample(bin_path, img_path, gt_box, pred_box=None):
+def visualize_sample(bin_path, gt_box, pred_box=None):
     # 1. Load the image and raw LiDAR point cloud data
-    img = cv2.imread(img_path)
     point_cloud = np.fromfile(bin_path, dtype=np.float32).reshape(-1, 4)
     pts_3d = point_cloud[:, :3]
     
@@ -314,6 +313,48 @@ def visualize_sample(bin_path, img_path, gt_box, pred_box=None):
     if pred_box is not None:
         pred_obb = create_o3d_box(pred_box, color=[1, 0, 0]) # Red represents Prediction
         geometries.append(pred_obb)
+        
+    # 4. Open an interactive 3D visualization window (supports mouse rotation, translation, and zoom)
+    print("=> Displaying 3D point cloud and bounding boxes (use mouse to rotate, zoom, and pan)")
+    o3d.visualization.draw_geometries(geometries)
+    
+# visualize_sample: Loads a KITTI LiDAR point cloud and an RGB image, builds an Open3D 
+# point cloud object, creates oriented 3D bounding boxes for ground-truth (green) and 
+# optional predictions (red), and renders them in an interactive 3D visualization window.
+def visualize_all_sample(bin_path, gt_boxes, pred_boxes=None):
+    # 1. Load the image and raw LiDAR point cloud data
+    point_cloud = np.fromfile(bin_path, dtype=np.float32).reshape(-1, 4)
+    pts_3d = point_cloud[:, :3]
+    
+    # 2. Create and populate an Open3D PointCloud object
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(pts_3d)
+    
+    # 3. Helper function to create an Open3D OrientedBoundingBox (OBB) from 7D box parameters
+    # box_params format: [x, y, z, l, w, h, rz]
+    def create_o3d_box(box_params, color):
+        x, y, z, l, w, h, rz = box_params
+        print("verify:", [x, y, z, l, w, h, rz])
+        # Create a rotation matrix around the Z-axis using the yaw angle (rz)
+        rot = o3d.geometry.OrientedBoundingBox.get_rotation_matrix_from_xyz((0, 0, rz))
+        obb = o3d.geometry.OrientedBoundingBox(np.array([x, y, z]), rot, np.array([l, w, h]))
+        obb.color = color
+        return obb
+        
+    geometries = [pcd]
+    
+    # Handle multiple ground-truth boxes (iterable list or single box)
+    if isinstance(gt_boxes, np.ndarray) and gt_boxes.ndim == 1:
+        gt_boxes = [gt_boxes]
+    for gt_box in gt_boxes:
+        geometries.append(create_o3d_box(gt_box, color=[0, 1, 0]))
+    
+    # Handle multiple prediction boxes
+    if pred_boxes is not None:
+        if isinstance(pred_boxes, np.ndarray) and pred_boxes.ndim == 1:
+            pred_boxes = [pred_boxes]
+        for pred_box in pred_boxes:
+            geometries.append(create_o3d_box(pred_box, color=[1, 0, 0]))
         
     # 4. Open an interactive 3D visualization window (supports mouse rotation, translation, and zoom)
     print("=> Displaying 3D point cloud and bounding boxes (use mouse to rotate, zoom, and pan)")
