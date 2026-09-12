@@ -15,18 +15,31 @@ find_package(visualization_msgs REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common filters io segmentation sample_consensus) # PLC
 find_package(pcl_conversions REQUIRED)
 find_package(cv_bridge REQUIRED)
+find_package(message_filters REQUIRED)
+
+set(ONNXRUNTIME_ROOT "/opt/onnxruntime")
+
+include_directories(${ONNXRUNTIME_ROOT}/include)
+
+find_library(ONNXRUNTIME_LIB 
+    NAMES onnxruntime 
+    PATHS ${ONNXRUNTIME_ROOT}/lib 
+    REQUIRED
+)
 
 # cpp executables
 add_executable(lidar_preprocessing src/lidar_preprocessing.cpp)
 add_executable(lidar_cluster_object src/lidar_cluster_object.cpp)
 add_executable(lidar_tracker src/lidar_tracker.cpp)
 add_executable(lidar_image_fusion src/lidar_image_fusion.cpp)
+add_executable(lidar_frustum_onnx src/lidar_frustum_onnx.cpp)
 
 set(ALL_CPP_TARGETS 
   lidar_preprocessing 
   lidar_cluster_object
   lidar_tracker
   lidar_image_fusion
+  lidar_frustum_onnx
 )
 
 foreach(target ${ALL_CPP_TARGETS})
@@ -34,6 +47,16 @@ foreach(target ${ALL_CPP_TARGETS})
   target_compile_definitions(${target} PUBLIC ${PCL_DEFINITIONS})
   target_link_libraries(${target} ${PCL_LIBRARIES})
 endforeach()
+
+target_include_directories(lidar_frustum_onnx PRIVATE
+  ${OpenCV_INCLUDE_DIRS}
+  /usr/local/include
+)
+
+target_link_libraries(lidar_frustum_onnx
+  ${OpenCV_LIBS}
+  ${ONNXRUNTIME_LIB}
+)
 
 # ament macro to link standard ROS2 dependencies (rclcpp, sensor_msgs, etc.)
 # for cpp
@@ -64,6 +87,15 @@ ament_target_dependencies(lidar_image_fusion
   cv_bridge                           
 )
 
+ament_target_dependencies(lidar_frustum_onnx
+  rclcpp
+  sensor_msgs
+  vision_msgs
+  visualization_msgs
+  cv_bridge         
+  message_filters    
+)
+
 # --- INSTALLATION CONFIGURATION ---
 # python scripts
 install(PROGRAMS
@@ -73,6 +105,11 @@ install(PROGRAMS
 
 install(PROGRAMS
   lidar_camera_perception/pytorch_camera_object_detection.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(PROGRAMS
+  lidar_camera_perception/frustum_onnx_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
