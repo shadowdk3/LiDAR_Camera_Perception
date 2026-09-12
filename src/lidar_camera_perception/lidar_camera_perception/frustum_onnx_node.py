@@ -12,9 +12,10 @@ from ultralytics import YOLO
 import torch
 import cv2
 from sensor_msgs.msg import PointCloud2, Image
+from visualization_msgs.msg import Marker, MarkerArray
+from geometry_msgs.msg import Point
 import message_filters
-
-import open3d as o3d
+import sensor_msgs_py.point_cloud2 as pc2
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 WS_DIR = SCRIPT_DIR.parent.parent
@@ -36,14 +37,12 @@ class FrustumOnnxNode(Node):
         self.input_name = self.ort_session.get_inputs()[0].name
         self.output_name = self.ort_session.get_outputs()[0].name
         
-        # Initialize Open3D Visualizer
-        self.vis = o3d.visualization.Visualizer()
-        self.vis.create_window(window_name="Frustum PointNet Live 3D Detection", width=1280, height=720)
-        self.is_vis_initialized = False
-        
-        # ROS 2 Subscribers with ApproximateTimeSynchronizer
+        # ROS 2 Subscribers & Publishers
         self.pc_sub = message_filters.Subscriber(self, PointCloud2, '/kitti/point_cloud')
         self.img_sub = message_filters.Subscriber(self, Image, '/kitti/image/gray/left')
+        
+        self.marker_pub = self.create_publisher(MarkerArray, '/frustum_bounding_boxes', 10)
+        self.debug_pc_pub = self.create_publisher(PointCloud2, '/frustum_debug_point_cloud', 10)
         
         self.ts = message_filters.ApproximateTimeSynchronizer(
             [self.pc_sub, self.img_sub], queue_size=10, slop=0.1
@@ -75,7 +74,6 @@ class FrustumOnnxNode(Node):
 
         velo_to_cam2_projection = cam2_projection_rectified @ cam0_rectification @ velo_to_cam0_extrinsic
         return velo_to_cam2_projection, velo_to_cam0_extrinsic, None
-
 
     def extract_frustum_data_from_pc(self, point_cloud, box2d):
         velo_cam2_projection, velo_to_cam0_extrinsic, _ = self.read_kitti_calib()
@@ -112,7 +110,6 @@ class FrustumOnnxNode(Node):
         centroid = np.mean(frustum_pts, axis=0)
         return frustum_pts, centroid
 
-
     def sample_and_normalize_points(self, frustum_pts, num_samples=512):
         centroid = np.mean(frustum_pts, axis=0)
         norm_pts = frustum_pts - centroid
@@ -145,39 +142,64 @@ class FrustumOnnxNode(Node):
             return np.frombuffer(msg.data, dtype=np.uint8).reshape((height, width, 3))
         else:
             return np.frombuffer(msg.data, dtype=np.uint8).reshape((height, width))
+        
+    def yaw_to_quaternion(self, yaw):
+        qx = 0.0
+        qy = 0.0
+        qz = np.sin(yaw * 0.5)
+        qw = np.cos(yaw * 0.5)
+        return qx, qy, qz, qw
     
-    def update_visualization(self, pts_3d, gt_boxes=None, pred_boxes=None):
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(pts_3d)
+    def publish_marker_array(self, pred_boxes, header):
+        marker_array = MarkerArray()
 
-        def create_o3d_box(box_params, color):
-            x, y, z, l, w, h, rz = box_params
-            rot = o3d.geometry.OrientedBoundingBox.get_rotation_matrix_from_xyz((0, 0, rz))
-            obb = o3d.geometry.OrientedBoundingBox(np.array([x, y, z]), rot, np.array([l, w, h]))
-            obb.color = color
-            return obb
+        del_marker = Marker()
+        del_marker.header = header
+        del_marker.action = Marker.DELETEALL
+        marker_array.markers.append(del_marker)
 
-        geometries = [pcd]
+        if pred_boxes is not None:
+            for i, box in enumerate(pred_boxes):
+                x, y, z, l, w, h, rz = box
 
-        if gt_boxes is not None and len(gt_boxes) > 0:
-            if isinstance(gt_boxes, np.ndarray) and gt_boxes.ndim == 1:
-                gt_boxes = [gt_boxes]
-            for gt_box in gt_boxes:
-                geometries.append(create_o3d_box(gt_box, color=[0, 1, 0]))
+                marker = Marker()
+                marker.header = header
+                marker.ns = "frustum_3d_boxes"
+                marker.id = i
+                marker.type = Marker.CUBE
+                marker.action = Marker.ADD
 
-        if pred_boxes is not None and len(pred_boxes) > 0:
-            if isinstance(pred_boxes, np.ndarray) and pred_boxes.ndim == 1:
-                pred_boxes = [pred_boxes]
-            for pred_box in pred_boxes:
-                geometries.append(create_o3d_box(pred_box, color=[1, 0, 0]))
+                marker.pose.position.x = float(x)
+                marker.pose.position.y = float(y)
+                marker.pose.position.z = float(z)
 
-        self.vis.clear_geometries()
-        for geom in geometries:
-            self.vis.add_geometry(geom)
+                qx, qy, qz, qw = self.yaw_to_quaternion(rz)
+                marker.pose.orientation.x = qx
+                marker.pose.orientation.y = qy
+                marker.pose.orientation.z = qz
+                marker.pose.orientation.w = qw
+
+                marker.scale.x = float(l)
+                marker.scale.y = float(w)
+                marker.scale.z = float(h)
+
+                marker.color.r = 1.0
+                marker.color.g = 0.0
+                marker.color.b = 0.0
+                marker.color.a = 0.6
+
+                marker.lifetime.sec = 0
+                marker.lifetime.nanosec = int(2e8)
+
+                marker_array.markers.append(marker)
+
+        self.marker_pub.publish(marker_array)
         
-        self.vis.poll_events()
-        self.vis.update_renderer()
-        
+    def publish_debug_point_cloud(self, points_np, header):
+        # points_np is expected to be an (N, 3) or (N, 4) numpy array
+        debug_msg = pc2.create_cloud_xyz32(header, points_np[:, :3])
+        self.debug_pc_pub.publish(debug_msg)
+    
     def sync_callback(self, pc_msg, img_msg):
         self.frame_count += 1
         self.get_logger().info(f"Processing synchronized frame {self.frame_count}...")
@@ -185,17 +207,18 @@ class FrustumOnnxNode(Node):
         current_pc = self.convert_cloud2_to_numpy(pc_msg)
         current_img = self.convert_img_to_numpy(img_msg)
         
-        # 1. Run YOLO to get 2D boxes
         results = self.yolo_model(current_img, verbose=False)
         boxes = results[0].boxes.xyxy.cpu().numpy()
 
         pred_boxes_list = []
-
+        all_frustum_pts = []
+        
         for box2d in boxes:
             frustum_pts, centroid = self.extract_frustum_data_from_pc(current_pc, box2d)
             if frustum_pts is None or len(frustum_pts) < 5:
                 continue
 
+            all_frustum_pts.append(frustum_pts)
             sampled_pts = self.sample_and_normalize_points(frustum_pts)
 
             with torch.no_grad():
@@ -208,9 +231,15 @@ class FrustumOnnxNode(Node):
             pred_box[2] += centroid[2]
             pred_boxes_list.append(pred_box)
 
-        # Update Open3D Visualization
-        self.update_visualization(current_pc[:, :3], pred_boxes=np.array(pred_boxes_list) if pred_boxes_list else None)
-
+        pred_array = np.array(pred_boxes_list) if pred_boxes_list else None
+        self.publish_marker_array(pred_array, pc_msg.header)
+        
+        # Publish combined frustum points to visually verify what the network "saw"
+        if len(all_frustum_pts) > 0:
+            combined_pts = np.vstack(all_frustum_pts)
+            self.publish_debug_point_cloud(combined_pts, pc_msg.header)
+            
+        
 if __name__ == '__main__':
     rclpy.init()
     node = FrustumOnnxNode()

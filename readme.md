@@ -5,6 +5,11 @@ This project implements a real-time 3D multi-object tracking and sensor fusion p
 ![demo](./reference/demo.gif)
 ![group_data2](./reference/group_data2.png)
 
+- run with frustum model
+
+![predict_ros](./reference/predict_ros.png)
+
+
 ## Environment
 
 * **OS:** Ubuntu 24.04 LTS (WSL2 compatible)
